@@ -79,6 +79,6 @@ describe("aad builders", () => {
   it("are order-independent for the same fields", () => {
     const a = commandAad({ sessionId: "s", commandId: "c", epoch: 1, op: "prompt", deviceId: "d" });
     const b = commandAad({ deviceId: "d", op: "prompt", epoch: 1, commandId: "c", sessionId: "s" });
-    expect(a.equals(b)).toBe(true);
+    expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
   });
 });

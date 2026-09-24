@@ -42,7 +42,7 @@ export async function createCoordinator({ config = configFromEnv(), accounts, go
   const store = accounts ?? new AccountStore({ persistPath: config.dataDir ? join(config.dataDir, "coordinator-store.json") : undefined });
   const googleClient = google ?? new GoogleOAuth({ ...config.google, redirectUri });
   const authService = new AuthService({ accounts: store, google: googleClient, sessionSecret: config.sessionSecret, allowedUsers: config.allowedUsers });
-  const handler = createHttpHandler({ accounts: store, authService, publicUrl });
+  const handler = createHttpHandler({ accounts: store, authService, publicUrl, webDir: config.webDir });
   server.on("request", (req, res) => void handler(req, res));
   const gateway = createGateway({ server, accounts: store, serverId: config.serverId });
   return {

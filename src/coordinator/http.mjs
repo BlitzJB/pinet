@@ -1,7 +1,73 @@
 // HTTP surface: Google SSO, MFA enrollment/verification, device and host
 // enrollment, and account inspection. Thin adapter over AuthService + store.
 
+import { readFile, stat } from "node:fs/promises";
+import { extname, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { qrSvg } from "./qr.mjs";
+
+const DEFAULT_WEB_DIR = fileURLToPath(new URL("../../web/dist/", import.meta.url));
+
+const CONTENT_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".map": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+function contentType(path) {
+  return CONTENT_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
+}
+
+/** Serve the built SPA from webDir, with an index.html fallback for client routes. */
+async function serveWebApp(res, webDir, pathname) {
+  const root = resolve(webDir);
+  const relative = pathname.replace(/^\/app\/?/u, "");
+  const candidate = resolve(root, relative || "index.html");
+  if (candidate !== root && !candidate.startsWith(root + sep)) {
+    res.writeHead(403);
+    res.end();
+    return;
+  }
+  try {
+    const info = await stat(candidate);
+    if (info.isFile()) {
+      const data = await readFile(candidate);
+      const immutable = candidate.includes(`${sep}assets${sep}`);
+      res.writeHead(200, {
+        "content-type": contentType(candidate),
+        "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+      });
+      res.end(data);
+      return;
+    }
+  } catch {
+    // fall through to SPA fallback
+  }
+  try {
+    const data = await readFile(resolve(root, "index.html"));
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
+    res.end(data);
+  } catch {
+    res.writeHead(503, { "content-type": "text/html; charset=utf-8" });
+    res.end(
+      "<!doctype html><meta charset=utf-8><body style='font-family:system-ui;max-width:40rem;margin:3rem auto'>" +
+        "<h1>Pinet web app not built</h1><p>Run <code>npm --prefix web install &amp;&amp; npm --prefix web run build</code>, then restart the coordinator.</p>",
+    );
+  }
+}
 
 function json(res, status, body, headers = {}) {
   const payload = JSON.stringify(body);
@@ -121,7 +187,7 @@ function mfaSetupPage({ email, secret, uri, recoveryCodes, error }) {
   );
 }
 
-export function createHttpHandler({ accounts, authService, publicUrl }) {
+export function createHttpHandler({ accounts, authService, publicUrl, webDir = DEFAULT_WEB_DIR }) {
   function session(req) {
     const auth = req.headers.authorization ?? "";
     const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : undefined;
@@ -135,6 +201,12 @@ export function createHttpHandler({ accounts, authService, publicUrl }) {
     const route = `${req.method} ${url.pathname}`;
     try {
       if (route === "GET /health") return json(res, 200, { ok: true });
+
+      // ---- web app (Vite SPA) ----
+      if (route === "GET /app") return redirect(res, "/app/");
+      if (req.method === "GET" && (url.pathname === "/app/" || url.pathname.startsWith("/app/"))) {
+        return serveWebApp(res, webDir, url.pathname);
+      }
 
       if (route === "GET /auth/login") {
         const returnTo = isAllowedReturnTo(url.searchParams.get("return_to"));
@@ -345,15 +417,8 @@ export function createHttpHandler({ accounts, authService, publicUrl }) {
         return json(res, 200, { hostId: device.id, accountId: consumed.accountId, fingerprint: device.fingerprint });
       }
 
-      // ---- account landing page (browser) ----
-      if (route === "GET /") {
-        if (!current) return redirect(res, "/auth/login?return_to=%2F");
-        const account = accounts.getAccount(current.accountId);
-        const notice = url.searchParams.get("mfa") === "enrolled" ? "Authenticator app enrolled." : undefined;
-        res.writeHead(200, { "content-type": "text/html" });
-        res.end(accountPage(account, notice));
-        return;
-      }
+      // ---- landing page ----
+      if (route === "GET /") return redirect(res, "/app/");
 
       return json(res, 404, { error: "not_found", route });
     } catch (error) {

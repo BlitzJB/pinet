@@ -42,7 +42,7 @@ export class PinetController extends Emitter {
   }
 
   async connect() {
-    const provider = this.cryptoProvider ?? (await import("../crypto/provider.mjs")).nodeCryptoProvider;
+    const provider = this.cryptoProvider ?? (await import(/* @vite-ignore */ "../crypto/provider.mjs")).nodeCryptoProvider;
     this.cryptoProvider = provider;
     const socket = new PinetSocket(this.url, { crypto: provider, reconnect: this.reconnectOption });
     this.socket = socket;

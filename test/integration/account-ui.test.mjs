@@ -36,23 +36,21 @@ async function loginToken(n) {
 const bearer = (token) => ({ authorization: `Bearer ${token}` });
 
 describe("account + MFA setup pages", () => {
-  it("redirects anonymous visitors to login", async () => {
-    const response = await fetch(`${coord.httpUrl}/`, { redirect: "manual" });
-    expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toContain("/auth/login");
+  it("serves the app at / and protects account setup", async () => {
+    const root = await fetch(`${coord.httpUrl}/`, { redirect: "manual" });
+    expect(root.status).toBe(302);
+    expect(root.headers.get("location")).toBe("/app/");
 
     const setup = await fetch(`${coord.httpUrl}/auth/mfa/setup`, { redirect: "manual" });
     expect(setup.status).toBe(302);
     expect(setup.headers.get("location")).toContain("/auth/login");
   });
 
-  it("shows the account page and enrolls an authenticator app", async () => {
+  it("enrolls an authenticator app from the setup page", async () => {
     const token = await loginToken(1);
 
-    const home = await fetch(`${coord.httpUrl}/`, { headers: bearer(token) });
-    const html = await home.text();
-    expect(html).toContain("ui1@example.com");
-    expect(html).toContain("not set up");
+    const profile = await fetch(`${coord.httpUrl}/me`, { headers: bearer(token) });
+    expect((await profile.json()).email).toBe("ui1@example.com");
 
     const setup = await fetch(`${coord.httpUrl}/auth/mfa/setup`, { headers: bearer(token) });
     const setupHtml = await setup.text();

@@ -35,6 +35,13 @@ else
 fi
 ( cd "$APP_DIR" && npm install --omit=dev --omit=peer --no-audit --no-fund )
 
+echo "==> web app"
+if [[ -f "$APP_DIR/web/package.json" ]]; then
+  ( cd "$APP_DIR/web" && npm install --no-audit --no-fund && npm run build )
+else
+  echo "    no web/ directory; /app will show a build notice"
+fi
+
 echo "==> configuration"
 if [[ ! -f "$ENV_FILE" ]]; then
   SESSION_SECRET="$(openssl rand -hex 32)"

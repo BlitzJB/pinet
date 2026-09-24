@@ -21,6 +21,7 @@ function normalize(value) {
   return out;
 }
 
+// Portable across Node and browsers (no Buffer).
 export function aadFrom(parts) {
-  return Buffer.from(canonicalJson(parts), "utf8");
+  return new TextEncoder().encode(canonicalJson(parts));
 }

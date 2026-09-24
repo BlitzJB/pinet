@@ -47,6 +47,7 @@ resource with `pi config` if you only want one role on a machine.
 | `src/controller/portal.mjs` | portal mapping: remote stream → local blocks, input → commands |
 | `extension/index.ts` | pi host extension (`/pinet` command) |
 | `extension/portal.ts` | pi-as-controller portal extension (`/portal` command) |
+| `web/` | Vite + React + Tailwind + TanStack web client (served at `/app`) |
 | `test/` | unit + integration suites (vitest) |
 
 ## Prerequisites
@@ -202,6 +203,24 @@ const controller = new PinetController({
   providers. Regenerate with `npm run conformance:generate`.
 - **Proof it works cross-runtime**: `test/integration/webcrypto-client.test.mjs`
   runs a WebCrypto controller (browser-style) against a Node host end to end.
+
+## Web client
+
+The coordinator serves a web app at **`/app`** (built from `web/` with Vite +
+React + Tailwind + TanStack Router/Query/Table). Sign in with Google (+ MFA),
+and the browser registers itself as a controller device using WebCrypto keys
+held in IndexedDB:
+
+- browse sessions and open one for a live, markdown-rendered transcript;
+- send prompts, abort, compact, switch model/thinking;
+- manage account, MFA enrollment and devices under Settings.
+
+```bash
+npm --prefix web install
+npm --prefix web run build      # deploy/install.sh does this on the server
+```
+
+See [`web/README.md`](./web/README.md).
 
 ## Network resilience
 
