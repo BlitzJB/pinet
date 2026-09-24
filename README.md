@@ -20,9 +20,9 @@ host.
 
 ```bash
 # review the source first: pi packages run with full system access
-pi install git:github.com/<owner>/pinet@v0.1.0
+pi install git:github.com/BlitzJB/pinet@v0.1.0
 # or try it for one run
-pi -e git:github.com/<owner>/pinet
+pi -e git:github.com/BlitzJB/pinet
 ```
 
 This registers two extensions:

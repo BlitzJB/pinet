@@ -28,5 +28,13 @@
   },
   "engines": {
     "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BlitzJB/pinet.git"
+  },
+  "homepage": "https://github.com/BlitzJB/pinet#readme",
+  "bugs": {
+    "url": "https://github.com/BlitzJB/pinet/issues"
   }
 }

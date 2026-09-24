@@ -91,7 +91,7 @@ Point hosts and controllers at the coordinator:
 ```bash
 # host
 PINET_HUB=wss://hub.example.com/ws PINET_HTTP=https://hub.example.com \
-  pi -e git:github.com/<owner>/pinet
+  pi -e git:github.com/BlitzJB/pinet
 # then: /pinet setup
 
 # controller

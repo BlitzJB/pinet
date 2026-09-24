@@ -1,6 +1,6 @@
 [Unit]
 Description=Pinet coordinator (auth + WebSocket gateway)
-Documentation=https://github.com/bharath/pinet
+Documentation=https://github.com/BlitzJB/pinet
 After=network-online.target
 Wants=network-online.target
 
