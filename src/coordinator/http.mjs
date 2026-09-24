@@ -1,6 +1,8 @@
 // HTTP surface: Google SSO, MFA enrollment/verification, device and host
 // enrollment, and account inspection. Thin adapter over AuthService + store.
 
+import { otpauthUri } from "../crypto/totp.mjs";
+
 function json(res, status, body, headers = {}) {
   const payload = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json", ...headers });
@@ -45,7 +47,13 @@ async function readBody(req) {
 }
 
 function wantsJson(req, url) {
-  return (req.headers.accept ?? "").includes("application/json") || url.searchParams.get("format") === "json";
+  const accept = req.headers.accept ?? "";
+  const contentType = req.headers["content-type"] ?? "";
+  return (
+    accept.includes("application/json") ||
+    contentType.includes("application/json") ||
+    url.searchParams.get("format") === "json"
+  );
 }
 
 function isAllowedReturnTo(value) {
@@ -73,6 +81,44 @@ function devicePage(code, message) {
     <input name="userCode" value="${escapeHtml(code)}" placeholder="XXXX-XXXX" autocomplete="one-time-code" autofocus/>
     <button type="submit">Approve</button>
   </form>`;
+}
+
+function page(title, body) {
+  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><body style="font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem;line-height:1.5">${body}</body>`;
+}
+
+function accountPage(account, notice) {
+  const mfa = account.mfa.enrolled ? "<b>enabled</b>" : "not set up";
+  return page(
+    "Pinet",
+    `<h1>Pinet</h1>
+     <p>Signed in as <b>${escapeHtml(account.email)}</b></p>
+     ${notice ? `<p style="color:#137333">${escapeHtml(notice)}</p>` : ""}
+     <ul><li>Multi-factor (authenticator app): ${mfa}</li></ul>
+     ${account.mfa.enrolled ? "" : `<p><a href="/auth/mfa/setup">Set up an authenticator app</a></p>`}
+     <form method="post" action="/auth/logout"><button type="submit">Sign out</button></form>`,
+  );
+}
+
+function mfaSetupPage({ email, secret, uri, recoveryCodes, error }) {
+  const grouped = secret.replace(/(.{4})/gu, "$1 ").trim();
+  const codes = recoveryCodes ? `<h3>Recovery codes</h3><p>Save these now. Each works once.</p><pre>${recoveryCodes.map(escapeHtml).join("\n")}</pre>` : `<p><em>Recovery codes were shown when you first opened this page.</em></p>`;
+  return page(
+    "Pinet — set up MFA",
+    `<h1>Set up multi-factor authentication</h1>
+     <p>Account: <b>${escapeHtml(email)}</b></p>
+     ${error ? `<p style="color:#c5221f">${escapeHtml(error)}</p>` : ""}
+     <ol>
+       <li>Open your authenticator app and add an account.</li>
+       <li>Enter this key (or paste the otpauth link):<br><code style="user-select:all;font-size:1.1em">${escapeHtml(grouped)}</code></li>
+     </ol>
+     <p style="word-break:break-all"><small>${escapeHtml(uri)}</small></p>
+     ${codes}
+     <form method="post" action="/auth/mfa/activate">
+       <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" autofocus/>
+       <button type="submit">Activate</button>
+     </form>`,
+  );
 }
 
 export function createHttpHandler({ accounts, authService, publicUrl }) {
@@ -205,7 +251,32 @@ export function createHttpHandler({ accounts, authService, publicUrl }) {
       if (route === "POST /auth/mfa/activate") {
         const body = await readBody(req);
         const ok = authService.activateMfa(current.accountId, String(body.code ?? ""));
-        return json(res, ok ? 200 : 400, { ok });
+        if (wantsJson(req, url)) return json(res, ok ? 200 : 400, { ok });
+        return redirect(res, ok ? "/?mfa=enrolled" : "/auth/mfa/setup?error=Invalid+code");
+      }
+
+      if (route === "GET /auth/mfa/setup") {
+        const account = accounts.getAccount(current.accountId);
+        if (account.mfa.enrolled) {
+          res.writeHead(200, { "content-type": "text/html" });
+          res.end(page("Pinet — MFA", `<h1>MFA enabled</h1><p>An authenticator app is already enrolled for ${escapeHtml(account.email)}.</p><p><a href="/">Back</a></p>`));
+          return;
+        }
+        let secret = account.mfa.secret;
+        let recoveryCodes = null;
+        if (!secret) {
+          const enrollment = authService.enrollMfa(current.accountId);
+          secret = enrollment.secret;
+          recoveryCodes = enrollment.recoveryCodes;
+        }
+        const uri = otpauthUri({ secret, account: account.email });
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(mfaSetupPage({ email: account.email, secret, uri, recoveryCodes, error: url.searchParams.get("error") ?? undefined }));
+        return;
+      }
+
+      if (route === "POST /auth/logout") {
+        return redirect(res, "/", { "set-cookie": "pinet_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0" });
       }
 
       if (route === "POST /devices/register") {
@@ -259,6 +330,16 @@ export function createHttpHandler({ accounts, authService, publicUrl }) {
           encPub: body.encPub,
         });
         return json(res, 200, { hostId: device.id, accountId: consumed.accountId, fingerprint: device.fingerprint });
+      }
+
+      // ---- account landing page (browser) ----
+      if (route === "GET /") {
+        if (!current) return redirect(res, "/auth/login?return_to=%2F");
+        const account = accounts.getAccount(current.accountId);
+        const notice = url.searchParams.get("mfa") === "enrolled" ? "Authenticator app enrolled." : undefined;
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(accountPage(account, notice));
+        return;
       }
 
       return json(res, 404, { error: "not_found", route });
