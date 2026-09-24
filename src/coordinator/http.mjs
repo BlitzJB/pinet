@@ -256,6 +256,7 @@ export function createHttpHandler({ accounts, authService, publicUrl }) {
       }
 
       if (route === "GET /auth/mfa/setup") {
+        if (!current) return redirect(res, "/auth/login?return_to=%2Fauth%2Fmfa%2Fsetup");
         const account = accounts.getAccount(current.accountId);
         if (account.mfa.enrolled) {
           res.writeHead(200, { "content-type": "text/html" });

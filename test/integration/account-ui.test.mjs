@@ -40,6 +40,10 @@ describe("account + MFA setup pages", () => {
     const response = await fetch(`${coord.httpUrl}/`, { redirect: "manual" });
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toContain("/auth/login");
+
+    const setup = await fetch(`${coord.httpUrl}/auth/mfa/setup`, { redirect: "manual" });
+    expect(setup.status).toBe(302);
+    expect(setup.headers.get("location")).toContain("/auth/login");
   });
 
   it("shows the account page and enrolls an authenticator app", async () => {
