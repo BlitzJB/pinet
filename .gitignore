@@ -1,0 +1,6 @@
+node_modules/
+.pinet/
+*.log
+.DS_Store
+coverage/
+.pi/

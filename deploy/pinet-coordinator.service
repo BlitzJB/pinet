@@ -1,0 +1,32 @@
+[Unit]
+Description=Pinet coordinator (auth + WebSocket gateway)
+Documentation=https://github.com/bharath/pinet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pinet
+Group=pinet
+WorkingDirectory=/opt/pinet
+EnvironmentFile=/etc/pinet/coordinator.env
+ExecStart=/usr/bin/node /opt/pinet/src/coordinator/server.mjs
+Restart=always
+RestartSec=2
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pinet
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

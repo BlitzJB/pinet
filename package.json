@@ -1,0 +1,32 @@
+{
+  "name": "pinet",
+  "version": "0.1.0",
+  "description": "Remote control for pi coding-agent sessions: a coordinator, a pi host extension, a pi-as-portal extension, and generic clients.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": ["pi-package", "pi", "coding-agent", "remote", "websocket"],
+  "pi": {
+    "extensions": ["./extension/index.ts", "./extension/portal.ts"]
+  },
+  "scripts": {
+    "hub": "node src/coordinator/server.mjs",
+    "controller": "node src/controller/cli.mjs",
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:watch": "vitest",
+    "conformance:generate": "node scripts/generate-conformance.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.1"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

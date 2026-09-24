@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "note": "Pinet client conformance vectors. Any client implementation must verify/decrypt these.",
+  "serverId": "srv_conformance",
+  "deviceId": "dev_conformance",
+  "role": "controller",
+  "identity": {
+    "publicKey": "MCowBQYDK2VwAyEAN5IEpgtJx5/002BBLCkUYavMID8estMYp0huKRTQPaA=",
+    "privateKey": "MC4CAQAwBQYDK2VwBCIEIPyOQDb++KX0f5hpaIortD37Sw1Rh7naMyYi2rREGY1S"
+  },
+  "challenge": {
+    "nonce": "conformance-nonce",
+    "timestamp": 1700000000000,
+    "signature": "v1Ni4BW6//IWHfP3S3UzdOnx6ae5uyFZrcX3DSnJxQOAso7bHZ8aJ4LI51hUvEDTP3kU385CL9b58fFsMBBMBQ=="
+  },
+  "groupKey": "nHYNL6HYRdr2sfymIcYbRwXrPwNg08QGkPmjR5zGB54=",
+  "recipientEncryption": {
+    "publicKey": "MCowBQYDK2VuAyEA4BzLkZGmWt2BCBaPj8OZ8at9YIRqPjbHzRyWIsPSqyE=",
+    "privateKey": "MC4CAQAwBQYDK2VuBCIEIMBGsVLvnpe9T+1GvLgVOzTaNu16UZ6Tcqet4cugg2Zt"
+  },
+  "wrapAad": {
+    "sessionId": "s_conf",
+    "epoch": 1,
+    "deviceId": "dev_conformance"
+  },
+  "wrapped": {
+    "hostEphPub": "MCowBQYDK2VuAyEAh/+h4+2JZmHqYMX/9BkQSbNN2vb34NMOe9nhB/AqlEM=",
+    "n": "cAf1FCqnPor04BPf",
+    "ct": "VLjLikAQZ3ja2tkX0rU+oQDGyWweEHenLqQSDidRtVE=",
+    "tag": "ybV0VRCBiOAmt/hmmcoqJA=="
+  },
+  "frame": {
+    "sessionId": "s_conf",
+    "epoch": 1,
+    "seq": 7,
+    "type": "session.entries",
+    "plaintext": [
+      {
+        "id": "e1",
+        "type": "message"
+      }
+    ],
+    "box": {
+      "n": "UPp2/vaF49dqttxH",
+      "ct": "ntk8VhlblFDGEOVt9lcJq2Pr5uGnZAibalQ5z/nW",
+      "tag": "f3tV3yVmRMA2It2hoFxfJA=="
+    }
+  },
+  "command": {
+    "sessionId": "s_conf",
+    "commandId": "c_1",
+    "epoch": 1,
+    "op": "prompt",
+    "deviceId": "dev_conformance",
+    "args": {
+      "text": "hello"
+    },
+    "box": {
+      "n": "lTBZfifGnK1UJ0hZ",
+      "ct": "w2MkfAd+KhSAjU9Lsss9sQ==",
+      "tag": "GhRhlI8tq9gzw+9cD6PTAg=="
+    },
+    "signature": "xTeqMk92wN9tG4HIOBUaUUexAF1hDF2bz+5iWyiR+vopzEsEB22CWtYQ9M1Q94cMuv/rVzvbZpGVbGxBSAT9BA=="
+  }
+}
