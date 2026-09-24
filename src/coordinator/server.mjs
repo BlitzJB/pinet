@@ -19,6 +19,7 @@ export function configFromEnv(env = process.env) {
     serverId: env.PINET_SERVER_ID ?? `srv_${randomUUID().slice(0, 8)}`,
     publicUrl,
     dataDir: env.PINET_DATA_DIR,
+    allowedUsers: env.PINET_ALLOWED_USERS,
     google: {
       clientId: env.GOOGLE_CLIENT_ID ?? "configure-me",
       clientSecret: env.GOOGLE_CLIENT_SECRET ?? "configure-me",
@@ -40,7 +41,7 @@ export async function createCoordinator({ config = configFromEnv(), accounts, go
   const redirectUri = config.google?.redirectUri ?? `${publicUrl}/auth/callback`;
   const store = accounts ?? new AccountStore({ persistPath: config.dataDir ? join(config.dataDir, "coordinator-store.json") : undefined });
   const googleClient = google ?? new GoogleOAuth({ ...config.google, redirectUri });
-  const authService = new AuthService({ accounts: store, google: googleClient, sessionSecret: config.sessionSecret });
+  const authService = new AuthService({ accounts: store, google: googleClient, sessionSecret: config.sessionSecret, allowedUsers: config.allowedUsers });
   const handler = createHttpHandler({ accounts: store, authService, publicUrl });
   server.on("request", (req, res) => void handler(req, res));
   const gateway = createGateway({ server, accounts: store, serverId: config.serverId });

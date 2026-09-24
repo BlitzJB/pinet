@@ -58,7 +58,14 @@ describe("account + MFA setup pages", () => {
     const setupHtml = await setup.text();
     const secret = setupHtml.match(/otpauth:\/\/totp\/[^"]*secret=([A-Z2-7]+)/u)?.[1];
     expect(secret, "otpauth secret must be present on the page").toBeTruthy();
+    expect(setupHtml).toContain("<svg"); // QR code
     expect(setupHtml).toContain("Recovery codes");
+
+    // Reloading keeps the same secret (QR stays valid) and reissues codes.
+    const setup2 = await fetch(`${coord.httpUrl}/auth/mfa/setup`, { headers: bearer(token) });
+    const setup2Html = await setup2.text();
+    expect(setup2Html).toContain("Recovery codes");
+    expect(setup2Html.match(/secret=([A-Z2-7]+)/u)[1]).toBe(secret);
 
     const activate = await fetch(`${coord.httpUrl}/auth/mfa/activate`, {
       method: "POST",

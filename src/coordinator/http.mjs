@@ -1,7 +1,7 @@
 // HTTP surface: Google SSO, MFA enrollment/verification, device and host
 // enrollment, and account inspection. Thin adapter over AuthService + store.
 
-import { otpauthUri } from "../crypto/totp.mjs";
+import { qrSvg } from "./qr.mjs";
 
 function json(res, status, body, headers = {}) {
   const payload = JSON.stringify(body);
@@ -102,16 +102,16 @@ function accountPage(account, notice) {
 
 function mfaSetupPage({ email, secret, uri, recoveryCodes, error }) {
   const grouped = secret.replace(/(.{4})/gu, "$1 ").trim();
+  const qr = qrSvg(uri, { cellSize: 4, margin: 2 });
   const codes = recoveryCodes ? `<h3>Recovery codes</h3><p>Save these now. Each works once.</p><pre>${recoveryCodes.map(escapeHtml).join("\n")}</pre>` : `<p><em>Recovery codes were shown when you first opened this page.</em></p>`;
   return page(
     "Pinet — set up MFA",
     `<h1>Set up multi-factor authentication</h1>
      <p>Account: <b>${escapeHtml(email)}</b></p>
      ${error ? `<p style="color:#c5221f">${escapeHtml(error)}</p>` : ""}
-     <ol>
-       <li>Open your authenticator app and add an account.</li>
-       <li>Enter this key (or paste the otpauth link):<br><code style="user-select:all;font-size:1.1em">${escapeHtml(grouped)}</code></li>
-     </ol>
+     <p>Scan this with your authenticator app:</p>
+     ${qr ? `<div style="background:#fff;padding:10px;border-radius:8px;display:inline-block">${qr}</div>` : "<p>(QR unavailable; use the key below)</p>"}
+     <p>Or enter this key manually:<br><code style="user-select:all;font-size:1.1em">${escapeHtml(grouped)}</code></p>
      <p style="word-break:break-all"><small>${escapeHtml(uri)}</small></p>
      ${codes}
      <form method="post" action="/auth/mfa/activate">
@@ -143,10 +143,21 @@ export function createHttpHandler({ accounts, authService, publicUrl }) {
       }
 
       if (route === "GET /auth/callback") {
-        const result = await authService.handleCallback({
-          code: url.searchParams.get("code"),
-          state: url.searchParams.get("state"),
-        });
+        let result;
+        try {
+          result = await authService.handleCallback({
+            code: url.searchParams.get("code"),
+            state: url.searchParams.get("state"),
+          });
+        } catch (error) {
+          if (error?.code === "access_denied") {
+            if (wantsJson(req, url)) return json(res, 403, { error: "access_denied" });
+            res.writeHead(403, { "content-type": "text/html" });
+            res.end(page("Pinet — access denied", "<h1>Access denied</h1><p>This account is not permitted to use this Pinet hub.</p>"));
+            return;
+          }
+          throw error;
+        }
         const returnTo = result.returnTo ?? "/";
         if (result.mfaRequired) {
           const target = `/auth/mfa?pending=${encodeURIComponent(result.pendingToken)}&return_to=${encodeURIComponent(returnTo)}`;
@@ -263,16 +274,17 @@ export function createHttpHandler({ accounts, authService, publicUrl }) {
           res.end(page("Pinet — MFA", `<h1>MFA enabled</h1><p>An authenticator app is already enrolled for ${escapeHtml(account.email)}.</p><p><a href="/">Back</a></p>`));
           return;
         }
-        let secret = account.mfa.secret;
-        let recoveryCodes = null;
-        if (!secret) {
-          const enrollment = authService.enrollMfa(current.accountId);
-          secret = enrollment.secret;
-          recoveryCodes = enrollment.recoveryCodes;
-        }
-        const uri = otpauthUri({ secret, account: account.email });
+        const enrollment = authService.enrollMfa(current.accountId);
         res.writeHead(200, { "content-type": "text/html" });
-        res.end(mfaSetupPage({ email: account.email, secret, uri, recoveryCodes, error: url.searchParams.get("error") ?? undefined }));
+        res.end(
+          mfaSetupPage({
+            email: account.email,
+            secret: enrollment.secret,
+            uri: enrollment.uri,
+            recoveryCodes: enrollment.recoveryCodes,
+            error: url.searchParams.get("error") ?? undefined,
+          }),
+        );
         return;
       }
 

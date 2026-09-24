@@ -31,6 +31,11 @@ residual risks.
   bound to the server id, role, device id and a fresh timestamp.
 
 ### Authorization
+
+- **Allowed-users allowlist**: `PINET_ALLOWED_USERS` is a case-insensitive
+  regular expression matched against the signed-in email at the OAuth callback.
+  Non-matching accounts are rejected with `403` before any account is created.
+  An invalid pattern fails startup rather than silently opening up.
 - Account-scoped session visibility.
 - Per-attachment `read` vs `control`; read-only commands rejected.
 - Commands require an existing attachment and a connected host.

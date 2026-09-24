@@ -124,6 +124,7 @@ PINET_HUB=wss://hub.example.com/ws PINET_HTTP=https://hub.example.com \
 | `PINET_DATA_DIR` | durable state directory |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | your Google OAuth client |
 | `GOOGLE_REDIRECT_URI` | must match the Google client (`…/auth/callback`) |
+| `PINET_ALLOWED_USERS` | JavaScript regex (case-insensitive) matched against the signed-in email; only matches may sign in. Empty = allow any Google account. Invalid regex fails startup (closed). |
 | `GOOGLE_AUTH_URL` / `GOOGLE_TOKEN_URL` / `GOOGLE_USERINFO_URL` | endpoint overrides (testing/mock IdP) |
 
 ## Notes

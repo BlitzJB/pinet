@@ -99,7 +99,10 @@ export class AccountStore {
 
   enrollMfa(accountId) {
     const account = this.#require(accountId);
-    const secret = generateTotpSecret();
+    // Keep a pending (not-yet-activated) secret stable across page reloads so
+    // the QR stays valid, but always reissue recovery codes so the setup page
+    // can display them.
+    const secret = account.mfa.secret && !account.mfa.enrolled ? account.mfa.secret : generateTotpSecret();
     const recoveryCodes = generateRecoveryCodes();
     account.mfa.secret = secret;
     account.mfa.enrolled = false;

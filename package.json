@@ -18,6 +18,7 @@
     "conformance:generate": "node scripts/generate-conformance.mjs"
   },
   "dependencies": {
+    "qrcode-generator": "^2.0.4",
     "ws": "^8.21.3"
   },
   "peerDependencies": {

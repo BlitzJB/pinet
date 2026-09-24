@@ -1,4 +1,4 @@
-// Authentication flow: Google SSO -> (MFA) -> full session.
+// Authentication flow: Google SSO -> MFA -> full session.
 // Pure logic, no HTTP. The HTTP layer is a thin adapter over this.
 
 import { randomBytes } from "node:crypto";
@@ -18,11 +18,25 @@ function generateUserCode() {
   return out;
 }
 
+// Allowed-users gate. `pattern` is a regular expression (string or RegExp)
+// matched case-insensitively against the signed-in email. Unset means allow
+// all; an invalid pattern throws so the hub fails closed at startup.
+export function compileAllowedUsers(pattern) {
+  if (pattern === undefined || pattern === null || pattern === "") return undefined;
+  if (pattern instanceof RegExp) return pattern;
+  try {
+    return new RegExp(String(pattern), "i");
+  } catch (error) {
+    throw new Error(`invalid allowed-users pattern: ${error.message}`);
+  }
+}
+
 export class AuthService {
-  constructor({ accounts, google, sessionSecret, now = Date.now, pendingTtlMs = 10 * 60_000, sessionTtlMs = 7 * 24 * 3_600_000, stateTtlMs = 10 * 60_000 }) {
+  constructor({ accounts, google, sessionSecret, allowedUsers, now = Date.now, pendingTtlMs = 10 * 60_000, sessionTtlMs = 7 * 24 * 3_600_000, stateTtlMs = 10 * 60_000 }) {
     this.accounts = accounts;
     this.google = google;
     this.sessionSecret = sessionSecret;
+    this.allowedUsers = compileAllowedUsers(allowedUsers);
     this.now = now;
     this.pendingTtlMs = pendingTtlMs;
     this.sessionTtlMs = sessionTtlMs;
@@ -49,6 +63,11 @@ export class AuthService {
   async handleCallback({ code, state }) {
     const { flow } = this.completeCallback({ code, state });
     const user = await this.google.authenticate({ code, codeVerifier: flow.verifier });
+    if (!this.isEmailAllowed(user.email)) {
+      const error = new Error(`Access denied for ${user.email}`);
+      error.code = "access_denied";
+      throw error;
+    }
     const account = this.accounts.upsertGoogleAccount(user);
     if (this.accounts.mfaRequired(account.id)) {
       const pendingToken = issueToken({
@@ -86,6 +105,12 @@ export class AuthService {
     const payload = verifyToken(token, this.sessionSecret, { now: this.now() });
     if (!payload || payload.kind !== "session") return null;
     return payload;
+  }
+
+  isEmailAllowed(email) {
+    if (!this.allowedUsers) return true;
+    this.allowedUsers.lastIndex = 0;
+    return this.allowedUsers.test(String(email ?? ""));
   }
 
   // -- device authorization (for in-pi onboarding) ----------------------
