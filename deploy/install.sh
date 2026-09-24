@@ -33,7 +33,7 @@ else
   cp -a "$REPO_DIR"/. "$APP_DIR"/
   rm -rf "$APP_DIR/.git" "$APP_DIR/node_modules"
 fi
-( cd "$APP_DIR" && npm ci --omit=dev --no-audit --no-fund )
+( cd "$APP_DIR" && npm install --omit=dev --omit=peer --no-audit --no-fund )
 
 echo "==> configuration"
 if [[ ! -f "$ENV_FILE" ]]; then
