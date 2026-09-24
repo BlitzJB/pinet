@@ -54,6 +54,7 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
       if (current?.stage === "ready") {
         if (current.role === "host") registry.unregisterHost(ws);
         else registry.unregisterController(ws);
+        console.log(`[hub] ${current.role} disconnected ${current.deviceId}`, registry.stats());
       }
     });
   });
@@ -108,6 +109,7 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
     } else {
       registry.registerController(ws, { deviceId, accountId: device.accountId });
     }
+    console.log(`[hub] ${role} connected ${deviceId} (${device.name})`, registry.stats());
     send(ws, "auth.ok", { deviceId, accountId: device.accountId, serverId, role });
     broadcastCatalog(device.accountId);
   }
@@ -140,7 +142,7 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
       case "session.meta": {
         const sessionId = route.sessionId ?? data.sessionId;
         const session = registry.sessions.get(sessionId);
-        if (!session || session.hostId !== auth.deviceId) return;
+        if (!session || !registry.ownsSession(ws, sessionId)) return;
         const epoch = route.epoch ?? data.epoch ?? 0;
         session.epoch = epoch;
         const msg = { v: 1, id: randomUUID(), type, ts: Date.now(), route: { sessionId, epoch }, data };

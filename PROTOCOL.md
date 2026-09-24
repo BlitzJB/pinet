@@ -310,3 +310,17 @@ On host disconnect the coordinator marks the host's sessions
 so the host can re-key them on return. A replacement connection for the same
 `hostId` does not clobber the new host (the stale socket's cleanup is a no-op),
 and the host's re-announcement restores routing.
+
+### Multiple pi processes on one host
+
+A host identity (`hostId`) identifies a *machine*, not a process. A machine may
+run several pi processes at once (multiple terminals/sessions), all sharing the
+stored identity, so the coordinator allows **many concurrent host connections
+for one `hostId`**. Sessions are routed to the connection that opened them
+(`session.hostWs`), never by `hostId` alone — otherwise two processes would
+fight over one slot and commands would be delivered to the wrong process.
+
+Setup is also idempotent: re-running `/pinet setup` on an already-enrolled
+machine reconnects with the stored device instead of registering a duplicate
+(which would create two devices sharing one keypair). Use `/pinet logout` first
+to enroll a genuinely new device.

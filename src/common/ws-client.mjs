@@ -143,6 +143,10 @@ export class PinetSocket extends Emitter {
         const wasReady = this.ready;
         this.ready = false;
         this.#stopHeartbeat();
+        if (!settled) {
+          settled = true;
+          reject(new Error("connection closed during handshake"));
+        }
         if (wasReady) this.emit("disconnected");
         if (this.closedByUser) {
           this.emit("closed");

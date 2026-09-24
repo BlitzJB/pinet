@@ -173,8 +173,16 @@ export default function pinet(pi: Pi): void {
 
   // -- connection -----------------------------------------------------------
 
-  async function connectBridge(): Promise<void> {
-    if (bridge) return;
+  async function connectBridge(force = false): Promise<void> {
+    if (bridge) {
+      if (!force) return;
+      try {
+        bridge.close();
+      } catch {
+        /* ignore */
+      }
+      bridge = undefined;
+    }
     const state = loadHostState(dir);
     if (!state.hostId || !state.identity || !state.encryption) throw new Error("host is not enrolled");
     const hostBridge = new HostBridge({
@@ -275,6 +283,14 @@ export default function pinet(pi: Pi): void {
 
       if (sub === "setup") {
         try {
+          // Idempotent: if already enrolled, just reconnect with the stored
+          // identity instead of creating another device.
+          if (state.hostId) {
+            setStatus(ctx, "pinet: reconnecting…");
+            await connectBridge(true);
+            notify(ctx, `Pinet: already set up as ${state.hostId}`, "info");
+            return;
+          }
           setStatus(ctx, "pinet: waiting for browser approval…");
           const result = await onboardHost({
             httpUrl,
@@ -287,7 +303,7 @@ export default function pinet(pi: Pi): void {
             onTick: () => setStatus(ctx, "pinet: waiting for browser approval…"),
           });
           setStatus(ctx, "pinet: connecting…");
-          await connectBridge();
+          await connectBridge(true);
           notify(ctx, `Pinet: enrolled as ${result.hostId}\nFingerprint: ${String(result.fingerprint).slice(0, 16)}`, "info");
         } catch (error) {
           setStatus(ctx, "pinet: setup failed");

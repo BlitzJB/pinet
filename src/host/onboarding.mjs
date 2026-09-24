@@ -111,6 +111,13 @@ export async function enrollHostWithCode({ httpUrl, code, name, identity, encryp
 }
 
 async function onboardDevice({ kind, file, httpUrl, dir, name, fetchImpl = fetch, signal, onCode, onTick }) {
+  // Idempotent: if this device is already enrolled, keep its identity. This
+  // prevents re-running setup from creating duplicate devices that share one
+  // keypair (which previously caused connection conflicts on a machine).
+  const existing = loadState(dir, file);
+  if (existing.deviceId && existing.identity && existing.encryption) {
+    return existing;
+  }
   const { identity, encryption } = ensureKeys(dir, file);
   const flow = await startDeviceFlow({ httpUrl, fetchImpl });
   onCode?.({ userCode: flow.userCode, verificationUri: flow.verificationUri, expiresIn: flow.expiresIn });

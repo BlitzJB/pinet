@@ -1,36 +1,43 @@
 // Coordinator routing state. Pure data + lookups; all authorization checks
 // live at the WebSocket gateway so this stays easy to test.
+//
+// Design note: a device identity (hostId) identifies a *machine*, but a machine
+// may run several pi processes concurrently. So hosts are keyed by their
+// connection (ws), and each session points at the connection that opened it.
 
 import { randomUUID } from "node:crypto";
 
 export class Registry {
   constructor() {
-    this.hosts = new Map(); // hostId -> { ws, accountId, hostName, agent, sessions:Set, connected }
-    this.sessions = new Map(); // sessionId -> { hostId, accountId, meta, epoch, subscribers:Set }
-    this.controllers = new Map(); // ws -> { deviceId, accountId, attachments:Map<sessionId, attachment> }
+    this.hosts = new Map(); // ws -> { deviceId, accountId, hostName, agent, sessions:Set, connected }
+    this.sessions = new Map(); // sessionId -> { hostWs, hostDeviceId, accountId, meta, epoch, subscribers:Set }
+    this.controllers = new Map(); // ws -> { role, deviceId, accountId, attachments:Map<sessionId, attachment> }
     this.attachments = new Map(); // attachmentId -> { ws, sessionId }
   }
 
   registerHost(ws, { deviceId, accountId, hostName, agent }) {
-    this.hosts.set(deviceId, { ws, deviceId, accountId, hostName: hostName ?? deviceId, agent: agent ?? null, sessions: new Set(), connected: true });
+    this.hosts.set(ws, {
+      ws,
+      deviceId,
+      accountId,
+      hostName: hostName ?? deviceId,
+      agent: agent ?? null,
+      sessions: new Set(),
+      connected: true,
+    });
     this.controllers.set(ws, { role: "host", deviceId, accountId, attachments: new Map() });
   }
 
   unregisterHost(ws) {
-    const info = this.controllers.get(ws);
-    if (info?.role === "host") {
-      const host = this.hosts.get(info.deviceId);
-      if (host && host.ws === ws) {
-        host.connected = false;
-        for (const sessionId of host.sessions) {
-          const session = this.sessions.get(sessionId);
-          if (session) {
-            for (const sub of session.subscribers) {
-              sendRaw(sub, "session.host", { sessionId, online: false });
-            }
-          }
-        }
+    const host = this.hosts.get(ws);
+    if (host) {
+      for (const sessionId of host.sessions) {
+        const session = this.sessions.get(sessionId);
+        if (!session || session.hostWs !== ws) continue;
+        session.hostWs = undefined;
+        for (const sub of session.subscribers) sendRaw(sub, "session.host", { sessionId, online: false });
       }
+      this.hosts.delete(ws);
     }
     this.controllers.delete(ws);
   }
@@ -44,9 +51,7 @@ export class Registry {
     if (info?.role === "controller") {
       for (const sessionId of info.attachments.keys()) {
         const session = this.sessions.get(sessionId);
-        if (!session) continue;
-        session.subscribers.delete(ws);
-        this.#notifyHostOfAttachments(sessionId, info.attachments);
+        if (session) session.subscribers.delete(ws);
       }
     }
     this.controllers.delete(ws);
@@ -55,13 +60,23 @@ export class Registry {
   openSession(ws, { sessionId, meta }) {
     const info = this.controllers.get(ws);
     if (!info || info.role !== "host") return undefined;
-    const host = this.hosts.get(info.deviceId);
+    const host = this.hosts.get(ws);
     let session = this.sessions.get(sessionId);
     if (!session) {
-      session = { sessionId, hostId: info.deviceId, accountId: info.accountId, meta: meta ?? {}, epoch: 0, subscribers: new Set() };
+      session = {
+        sessionId,
+        hostWs: ws,
+        hostDeviceId: info.deviceId,
+        accountId: info.accountId,
+        meta: meta ?? {},
+        epoch: 0,
+        subscribers: new Set(),
+      };
       this.sessions.set(sessionId, session);
     } else {
-      session.hostId = info.deviceId;
+      // Last host to open a given session id wins; fence the previous owner.
+      session.hostWs = ws;
+      session.hostDeviceId = info.deviceId;
       session.meta = meta ?? session.meta;
     }
     host?.sessions.add(sessionId);
@@ -72,15 +87,21 @@ export class Registry {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     for (const sub of session.subscribers) sendRaw(sub, "session.removed", { sessionId, reason: "closed" });
-    this.hosts.get(session.hostId)?.sessions.delete(sessionId);
+    if (session.hostWs) this.hosts.get(session.hostWs)?.sessions.delete(sessionId);
     this.sessions.delete(sessionId);
   }
 
+  /** The live host connection currently owning a session, if any. */
   hostFor(sessionId) {
     const session = this.sessions.get(sessionId);
-    if (!session) return undefined;
-    const host = this.hosts.get(session.hostId);
+    if (!session?.hostWs) return undefined;
+    const host = this.hosts.get(session.hostWs);
     return host?.connected ? host : undefined;
+  }
+
+  ownsSession(ws, sessionId) {
+    const session = this.sessions.get(sessionId);
+    return Boolean(session && session.hostWs === ws);
   }
 
   subscribers(sessionId) {
@@ -119,12 +140,12 @@ export class Registry {
     const out = [];
     for (const session of this.sessions.values()) {
       if (session.accountId !== accountId) continue;
-      const host = this.hosts.get(session.hostId);
+      const host = session.hostWs ? this.hosts.get(session.hostWs) : undefined;
       out.push({
         sessionId: session.sessionId,
-        hostId: session.hostId,
-        hostName: host?.hostName ?? session.hostId,
-        hostConnected: host?.connected ?? false,
+        hostId: host?.deviceId ?? session.hostDeviceId,
+        hostName: host?.hostName ?? null,
+        hostConnected: Boolean(host?.connected),
         meta: session.meta,
         epoch: session.epoch,
       });
@@ -132,11 +153,9 @@ export class Registry {
     return out;
   }
 
-  #notifyHostOfAttachments(sessionId, attachments) {
-    const session = this.sessions.get(sessionId);
-    const host = session && this.hosts.get(session.hostId);
-    if (!host?.connected) return;
-    // host is informed implicitly through host.attach/detach messages instead.
+  /** Counts for diagnostics. */
+  stats() {
+    return { hosts: this.hosts.size, controllers: this.controllers.size, sessions: this.sessions.size, attachments: this.attachments.size };
   }
 }
 
