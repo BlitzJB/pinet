@@ -42,7 +42,7 @@ suite("pi extension (real process)", () => {
       tmp = mkdtempSync(join(tmpdir(), "pinet-pi-"));
       piProcess = spawn(
         "pi",
-        ["--mode", "rpc", "-e", "/root/pinet/extension/index.ts", "--session-dir", join(tmp, "sessions")],
+        ["--mode", "rpc", "--no-extensions", "-e", "/root/pinet/extension/index.ts", "--session-dir", join(tmp, "sessions")],
         {
           env: {
             ...process.env,

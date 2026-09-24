@@ -14,7 +14,7 @@ suite("portal extension in real pi", () => {
       const tmp = mkdtempSync(join(tmpdir(), "pinet-portal-load-"));
       const pi = spawn(
         "pi",
-        ["--mode", "rpc", "-e", "/root/pinet/extension/portal.ts", "--session-dir", join(tmp, "sessions")],
+        ["--mode", "rpc", "--no-extensions", "-e", "/root/pinet/extension/portal.ts", "--session-dir", join(tmp, "sessions")],
         { env: { ...process.env, PINET_DIR: tmp }, stdio: ["pipe", "pipe", "pipe"] },
       );
       let log = "";
