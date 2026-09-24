@@ -2,7 +2,7 @@ import { PinetController } from "../../../src/controller/client.mjs";
 import { describeEntry } from "../../../src/controller/portal.mjs";
 import { webCryptoProvider } from "../../../src/crypto/webcrypto.mjs";
 import type { ServerSession } from "./api";
-import { ensureDevice } from "./device";
+import { ensureDevice, loadDevice, clearDevice, type StoredDevice } from "./device";
 import { Store } from "./store";
 
 export interface DisplayEntry {
@@ -96,37 +96,57 @@ export class PinetConnection {
   async #connect(): Promise<void> {
     this.conn.set({ status: "connecting" });
     try {
-      const device = await ensureDevice();
-      const controller = new PinetController({
-        url: wsUrl(),
-        deviceId: device.deviceId,
-        identity: device.identity,
-        encryption: device.encryption,
-        crypto: webCryptoProvider,
-        reconnect: true,
-      });
-      this.controller = controller;
-
-      controller.on("disconnected", () => this.conn.set({ status: "reconnecting" }));
-      controller.on("reconnecting", () => this.conn.set({ status: "reconnecting" }));
-      controller.on("reconnected", () => this.conn.set({ status: "connected" }));
-      controller.on("resynced", () => this.conn.set({ status: "connected" }));
-      controller.on("snapshot", (data: any) => this.#applyFull(data.sessionId, data.entries, data.status, data.meta, data.epoch));
-      controller.on("rebase", (data: any) => this.#applyFull(data.sessionId, data.entries, undefined, undefined, data.epoch));
-      controller.on("entries", (data: any) => this.#applyDelta(data.sessionId, data.entries, data.epoch));
-      controller.on("status", (data: any) => this.store(data.sessionId).set({ status: data.status ?? null, epoch: data.epoch ?? 0 }));
-      controller.on("meta", (data: any) => this.store(data.sessionId).set({ meta: data.meta ?? null }));
-      controller.on("removed", (data: any) => this.store(data.sessionId).set({ attached: false }));
-      controller.on("decrypt_error", () => this.conn.set((state) => ({ ...state })));
-
-      await controller.connect();
+      const device = await this.#connectWithDevice();
       this.conn.set({ status: "connected", deviceId: device.deviceId, error: undefined });
     } catch (error) {
+      // The stored device may have been revoked or cleared server-side. Forget
+      // it and register a fresh controller once.
+      const stored = await loadDevice();
+      if (stored) {
+        try {
+          await clearDevice();
+          const device = await this.#connectWithDevice();
+          this.conn.set({ status: "connected", deviceId: device.deviceId, error: undefined });
+          return;
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.controller = undefined;
       this.conn.set({ status: "error", error: message });
       throw error;
     }
+  }
+
+  async #connectWithDevice(): Promise<StoredDevice> {
+    const device = await ensureDevice();
+    const controller = new PinetController({
+      url: wsUrl(),
+      deviceId: device.deviceId,
+      identity: device.identity,
+      encryption: device.encryption,
+      crypto: webCryptoProvider,
+      reconnect: true,
+    });
+    this.#wire(controller);
+    await controller.connect();
+    this.controller = controller;
+    return device;
+  }
+
+  #wire(controller: PinetController): void {
+    controller.on("disconnected", () => this.conn.set({ status: "reconnecting" }));
+    controller.on("reconnecting", () => this.conn.set({ status: "reconnecting" }));
+    controller.on("reconnected", () => this.conn.set({ status: "connected" }));
+    controller.on("resynced", () => this.conn.set({ status: "connected" }));
+    controller.on("snapshot", (data: any) => this.#applyFull(data.sessionId, data.entries, data.status, data.meta, data.epoch));
+    controller.on("rebase", (data: any) => this.#applyFull(data.sessionId, data.entries, undefined, undefined, data.epoch));
+    controller.on("entries", (data: any) => this.#applyDelta(data.sessionId, data.entries, data.epoch));
+    controller.on("status", (data: any) => this.store(data.sessionId).set({ status: data.status ?? null, epoch: data.epoch ?? 0 }));
+    controller.on("meta", (data: any) => this.store(data.sessionId).set({ meta: data.meta ?? null }));
+    controller.on("removed", (data: any) => this.store(data.sessionId).set({ attached: false }));
+    controller.on("decrypt_error", () => this.conn.set((state) => ({ ...state })));
   }
 
   list(): Promise<ServerSession[]> {
