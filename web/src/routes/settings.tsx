@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { clearDevice } from "../lib/device";
 import { getMe, listDevices, revokeDevice } from "../lib/api";
+import { cn } from "../lib/utils";
+import { mono, paper } from "../components/ui/surfaces";
 
 export function SettingsPage() {
   const queryClient = useQueryClient();
@@ -8,40 +10,45 @@ export function SettingsPage() {
   const devices = useQuery({ queryKey: ["devices"], queryFn: listDevices, retry: false });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8 px-4 py-6">
-      <section>
-        <h1 className="mb-3 text-lg font-semibold text-mist-200">Account</h1>
-        <div className="rounded-xl border border-ink-800 bg-ink-900/60 p-4 text-sm">
+    <div className="mx-auto max-w-2xl space-y-8 overflow-y-auto px-6 py-8">
+      <section className="fade-in slide-in-from-bottom-1 animate-in fill-mode-both duration-300 motion-reduce:animate-none">
+        <h1 className="mb-3 text-lg font-semibold tracking-tight">Account</h1>
+        <div className={cn(paper, "rounded-2xl p-4 text-sm")}>
           <div className="flex items-center justify-between">
-            <span className="text-mist-400">Email</span>
-            <span className="text-mist-200">{me.data?.email ?? "—"}</span>
+            <span className="text-muted-foreground">Email</span>
+            <span>{me.data?.email ?? "—"}</span>
           </div>
-          <div className="mt-2 flex items-center justify-between">
-            <span className="text-mist-400">Multi-factor (authenticator app)</span>
-            <span className={me.data?.mfaEnrolled ? "text-ok-400" : "text-warn-400"}>{me.data?.mfaEnrolled ? "enabled" : "not set up"}</span>
+          <div className="mt-3 flex items-center justify-between">
+            <span className="text-muted-foreground">Authenticator app</span>
+            <span className={me.data?.mfaEnrolled ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}>
+              {me.data?.mfaEnrolled ? "enabled" : "not set up"}
+            </span>
           </div>
           {!me.data?.mfaEnrolled && (
-            <a href="/auth/mfa/setup" className="mt-3 inline-block rounded-lg bg-brand-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-400">
+            <a
+              href="/auth/mfa/setup"
+              className="mt-4 inline-block rounded-lg bg-foreground px-3 py-1.5 text-xs font-semibold text-background transition-[opacity,scale] duration-150 hover:opacity-90 active:scale-[0.98]"
+            >
               Set up authenticator app
             </a>
           )}
         </div>
       </section>
 
-      <section>
+      <section className="fade-in slide-in-from-bottom-1 animate-in fill-mode-both duration-300 [animation-delay:60ms] motion-reduce:animate-none">
         <div className="mb-3 flex items-center gap-3">
-          <h2 className="text-lg font-semibold text-mist-200">Devices</h2>
+          <h2 className="text-lg font-semibold tracking-tight">Devices</h2>
           <button
             type="button"
             onClick={() => void devices.refetch()}
-            className="ml-auto rounded-lg border border-ink-700 px-3 py-1.5 text-xs text-mist-300 hover:bg-ink-800"
+            className="ml-auto rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
           >
             Refresh
           </button>
         </div>
-        <div className="overflow-hidden rounded-xl border border-ink-800">
+        <div className={cn(paper, "overflow-hidden rounded-2xl")}>
           <table className="w-full text-left text-sm">
-            <thead className="bg-ink-900 text-xs uppercase tracking-wide text-mist-400">
+            <thead className="text-[11px] tracking-wide text-muted-foreground uppercase">
               <tr>
                 <th className="px-4 py-2.5 font-medium">Name</th>
                 <th className="px-4 py-2.5 font-medium">Kind</th>
@@ -51,11 +58,13 @@ export function SettingsPage() {
             </thead>
             <tbody>
               {(devices.data ?? []).map((device) => (
-                <tr key={device.id} className="border-t border-ink-800">
-                  <td className="px-4 py-2.5 text-mist-200">{device.name}</td>
-                  <td className="px-4 py-2.5 text-mist-400">{device.kind}</td>
+                <tr key={device.id} className="border-t border-border/60">
+                  <td className="px-4 py-2.5">{device.name}</td>
+                  <td className={cn("px-4 py-2.5 text-muted-foreground", mono)}>{device.kind}</td>
                   <td className="px-4 py-2.5">
-                    <span className={device.revoked ? "text-bad-400" : "text-ok-400"}>{device.revoked ? "revoked" : "active"}</span>
+                    <span className={device.revoked ? "text-destructive" : "text-emerald-600 dark:text-emerald-400"}>
+                      {device.revoked ? "revoked" : "active"}
+                    </span>
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     {!device.revoked && (
@@ -65,7 +74,7 @@ export function SettingsPage() {
                           await revokeDevice(device.id);
                           await devices.refetch();
                         }}
-                        className="rounded-lg border border-ink-700 px-2.5 py-1 text-xs text-bad-400 hover:bg-bad-400/10"
+                        className="rounded-lg px-2.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10"
                       >
                         Revoke
                       </button>
@@ -75,7 +84,7 @@ export function SettingsPage() {
               ))}
               {devices.data?.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-4 text-center text-mist-400">
+                  <td colSpan={4} className="px-4 py-4 text-center text-muted-foreground">
                     No devices yet.
                   </td>
                 </tr>
@@ -90,7 +99,7 @@ export function SettingsPage() {
             queryClient.clear();
             location.reload();
           }}
-          className="mt-3 rounded-lg border border-ink-700 px-3 py-1.5 text-xs text-mist-300 hover:bg-ink-800"
+          className="mt-3 rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
         >
           Forget this browser's device keys
         </button>

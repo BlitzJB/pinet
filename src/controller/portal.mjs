@@ -8,20 +8,20 @@ export function describeEntry(entry) {
   if (entry.type === "message" && entry.message) {
     const message = entry.message;
     const text = contentText(message.content);
-    if (message.role === "user") return { id: entry.id, kind: "user", title: "you", body: text, text };
+    if (message.role === "user") return { id: entry.id, kind: "user", title: "you", body: text, text, timestamp: entry.timestamp };
     if (message.role === "assistant") {
-      const tools = Array.isArray(message.content)
-        ? message.content
-            .filter((block) => block?.type === "toolCall")
-            .map((block) => ({ name: block.name, args: shorten(JSON.stringify(block.arguments), 300) }))
-        : [];
+      const content = Array.isArray(message.content) ? message.content : [];
+      const tools = content
+        .filter((block) => block?.type === "toolCall")
+        .map((block) => ({ id: block.id, name: block.name, args: shorten(JSON.stringify(block.arguments), 300) }));
+      const reasoning = content.filter((block) => block?.type === "thinking").map((block) => block.thinking).join("\n");
       const body = [text, ...tools.map((tool) => `${tool.name} ${tool.args}`)].filter(Boolean).join("\n");
-      if (!body.trim()) return null;
-      return { id: entry.id, kind: "assistant", title: "pi", body, text, tools };
+      if (!body.trim() && !reasoning.trim()) return null;
+      return { id: entry.id, kind: "assistant", title: "pi", body, text, reasoning, tools, timestamp: entry.timestamp };
     }
     if (message.role === "toolResult") {
       const output = contentText(message.content);
-      return { id: entry.id, kind: "tool", title: message.toolName ?? "tool", body: shorten(firstLines(output, 12)), text: output, error: Boolean(message.isError) };
+      return { id: entry.id, kind: "tool", title: message.toolName ?? "tool", toolCallId: message.toolCallId, body: shorten(firstLines(output, 12)), text: output, error: Boolean(message.isError), timestamp: entry.timestamp };
     }
     if (message.role === "custom") return { id: entry.id, kind: "system", title: message.customType ?? "custom", body: shorten(contentText(message.content)) };
     return null;
