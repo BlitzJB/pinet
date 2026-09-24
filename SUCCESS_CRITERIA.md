@@ -175,3 +175,16 @@ extension test. `node --test` is not used; the suite runs with `vitest`.
 - [x] O6. A deliberate close disables reconnection.
       *`test/integration/reconnect.test.mjs`*
 - [x] O7. Reconnection behavior is documented. *`PROTOCOL.md` §12*
+
+## P. Packaging & deployment — PASS
+- [x] P1. Public GitHub repo with a `pi-package` manifest declaring both extensions.
+      *https://github.com/BlitzJB/pinet*
+- [x] P2. Installable directly from GitHub: `pi -e git:github.com/BlitzJB/pinet`
+      loads `/pinet` and `/portal`. *verified via RPC `get_commands`*
+- [x] P3. Persistent coordinator: systemd unit (boot-enabled, auto-restart,
+      hardened), nginx TLS + WebSocket reverse proxy, ufw 80/443, durable state.
+      *`deploy/`, live at https://pinet.bharathi.fyi*
+- [x] P4. Idempotent installer that preserves certbot-managed TLS on re-run.
+      *`deploy/install.sh`*
+- [x] P5. TLS issued + auto-renewing; WSS reaches the coordinator through the
+      proxy (`wss://pinet.bharathi.fyi/ws` returns `auth.challenge`).

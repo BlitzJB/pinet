@@ -68,7 +68,12 @@ systemctl restart "$SERVICE"
 
 echo "==> nginx"
 install -m 0644 "$APP_DIR/deploy/nginx-pinet-upgrade.conf" /etc/nginx/conf.d/pinet-upgrade.conf
-install -m 0644 "$APP_DIR/deploy/nginx-pinet.conf" /etc/nginx/sites-available/pinet
+if [[ -d "/etc/letsencrypt/live/$DOMAIN" ]]; then
+  echo "    TLS certificate present; leaving certbot-managed vhost untouched"
+else
+  sed "s/__DOMAIN__/$DOMAIN/g" "$APP_DIR/deploy/nginx-pinet.conf" > /etc/nginx/sites-available/pinet
+  chmod 0644 /etc/nginx/sites-available/pinet
+fi
 ln -sf /etc/nginx/sites-available/pinet /etc/nginx/sites-enabled/pinet
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
@@ -81,11 +86,16 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 
 echo
-echo "Coordinator status:"
+ echo "Coordinator status:"
 systemctl --no-pager --lines=5 status "$SERVICE" || true
 echo
 echo "Local health:"
 curl -fsS http://127.0.0.1:8787/health && echo
 echo
-echo "Next: point $DOMAIN (A/AAAA) at this host, then run:"
-echo "  certbot --nginx -d $DOMAIN --redirect --agree-tos -m you@example.com"
+ if [[ -d "/etc/letsencrypt/live/$DOMAIN" ]]; then
+  echo "TLS already configured for $DOMAIN; health:"
+  curl -fsS "https://$DOMAIN/health" && echo
+else
+  echo "Next: point $DOMAIN (A/AAAA) at this host, then run:"
+  echo "  certbot --nginx -d $DOMAIN --redirect --agree-tos -m you@example.com"
+fi
