@@ -106,11 +106,21 @@ describe("pi portal extension", () => {
       const received = [];
       host.onCommand(async ({ op, args }) => {
         received.push({ op, args });
+        // The real host echoes the user's message back as an entry.
+        host.publishEntries([{ type: "message", id: "u1", parentId: null, message: { role: "user", content: args.text } }]);
         return { accepted: true, mode: "steer" };
       });
       const result = await pi.handlers.input[0]({ text: "hello remote", source: "interactive" }, ctx);
       expect(result).toEqual({ action: "handled" });
       expect(received[0]).toMatchObject({ op: "prompt", args: { text: "hello remote" } });
+
+      // The user's message is echoed optimistically (immediately) and the
+      // remote echo is deduped, so it appears exactly once.
+      const optimistic = pi.appended.filter((e) => e.data?.kind === "user" && e.data.text === "hello remote");
+      expect(optimistic.length).toBeGreaterThanOrEqual(1);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const userRecords = pi.appended.filter((e) => e.data?.kind === "user" && e.data.text === "hello remote");
+      expect(userRecords).toHaveLength(1);
 
       // Remote entries published later stream into the local transcript.
       host.publishEntries([{ type: "message", id: "e2", parentId: "e1", message: { role: "assistant", content: [{ type: "text", text: "remote reply" }] } }]);

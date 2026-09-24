@@ -12,6 +12,7 @@
 
 import { hostname } from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Box, Markdown, Text } from "@earendil-works/pi-tui";
 import { PinetController } from "../src/controller/client.mjs";
 import { createPortal } from "../src/controller/portal.mjs";
 import {
@@ -22,8 +23,72 @@ import {
   onboardController,
 } from "../src/host/onboarding.mjs";
 
-type PortalRecord = { id?: string; kind?: string; title?: string; body?: string; error?: boolean };
+type PortalRecord = { id?: string; kind?: string; title?: string; body?: string; text?: string; tools?: { name: string; args?: string }[]; error?: boolean };
 type Pi = ExtensionAPI;
+
+function markdownTheme(theme: any) {
+  const fg = (name: string) => (text: string) => {
+    try {
+      return theme.fg(name, text);
+    } catch {
+      return text;
+    }
+  };
+  return {
+    heading: fg("accent"),
+    link: fg("accent"),
+    linkUrl: fg("dim"),
+    code: fg("accent"),
+    codeBlock: (text: string) => text,
+    codeBlockBorder: fg("dim"),
+    quote: fg("muted"),
+    quoteBorder: fg("dim"),
+    hr: fg("dim"),
+    listBullet: fg("accent"),
+    bold: (text: string) => {
+      try {
+        return theme.bold(text);
+      } catch {
+        return text;
+      }
+    },
+    italic: (text: string) => text,
+    strikethrough: (text: string) => text,
+    underline: (text: string) => text,
+  };
+}
+
+// Render a remote entry with pi's own TUI components so it looks like a native
+// session: markdown for assistant text, tool calls, and boxed messages.
+export function renderRemote(record: PortalRecord, expanded: boolean, theme: any) {
+  const text = record.text ?? record.body ?? "";
+  if (record.kind === "user") {
+    const box = new Box(1, 0, (line: string) => theme.bg("customMessageBg", line));
+    box.addChild(new Text(theme.bold(theme.fg("accent", "you")), 0, 0));
+    box.addChild(new Text(text, 0, 0));
+    return box;
+  }
+  if (record.kind === "assistant") {
+    const box = new Box(1, 0);
+    box.addChild(new Text(theme.bold(theme.fg("success", "pi")), 0, 0));
+    if (record.text) box.addChild(new Markdown(record.text, 0, 0, markdownTheme(theme)));
+    for (const tool of record.tools ?? []) {
+      box.addChild(new Text(theme.fg("toolTitle", `$ ${tool.name} `) + theme.fg("dim", tool.args ?? ""), 0, 0));
+    }
+    return box;
+  }
+  if (record.kind === "tool") {
+    const box = new Box(1, 0, (line: string) => theme.bg("customMessageBg", line));
+    const mark = record.error ? theme.fg("error", "x") : theme.fg("success", "ok");
+    box.addChild(new Text(`${mark} ${theme.fg("toolTitle", record.title ?? "tool")}`, 0, 0));
+    const lines = String(text).split("\n");
+    const shown = expanded ? lines : lines.slice(0, 12);
+    if (shown.length) box.addChild(new Text(theme.fg("dim", shown.join("\n")), 0, 0));
+    if (!expanded && lines.length > 12) box.addChild(new Text(theme.fg("muted", `... ${lines.length - 12} more lines`), 0, 0));
+    return box;
+  }
+  return new Text(theme.fg("muted", `[${record.title ?? record.kind ?? "remote"}] `) + theme.fg("dim", text), 0, 0);
+}
 
 function deriveHttp(wsUrl: string): string {
   const url = new URL(wsUrl);
@@ -100,18 +165,18 @@ export default function portal(pi: Pi): void {
     return instance;
   }
 
+  let pendingUserEchoes = 0;
   function append(record: PortalRecord): void {
+    // Skip the remote echo of a message we already showed optimistically.
+    if (record.kind === "user" && pendingUserEchoes > 0) {
+      pendingUserEchoes -= 1;
+      return;
+    }
     pi.appendEntry("pinet.remote", record);
   }
 
-  // Render remote blocks in the local transcript (minimal Component: render/invalidate).
-  pi.registerEntryRenderer("pinet.remote", (entry, _options, theme) => {
-    const record = (entry.data ?? {}) as PortalRecord;
-    const color = record.kind === "user" ? "accent" : record.kind === "tool" ? "dim" : record.kind === "system" ? "muted" : "text";
-    const marker = record.error ? theme.fg("error", "✖") : theme.fg(color, `[${record.title ?? record.kind ?? "remote"}]`);
-    const lines = `${marker} ${record.body ?? ""}`.split("\n");
-    return { render: () => lines, invalidate() {} };
-  });
+  // Render remote blocks in the local transcript using pi's TUI components.
+  pi.registerEntryRenderer("pinet.remote", (entry, { expanded }, theme) => renderRemote((entry.data ?? {}) as PortalRecord, expanded, theme));
 
   pi.registerCommand("portal", {
     description: "Pinet portal: /portal setup | sessions | attach <id> | detach | status",
@@ -246,13 +311,18 @@ export default function portal(pi: Pi): void {
     if (!activePortal) return { action: "continue" };
     if (event.text.startsWith("/")) return { action: "continue" };
     if (!event.text.trim()) return { action: "continue" };
+    // Echo immediately so the user's message doesn't wait on the round-trip.
+    append({ kind: "user", title: "you", body: event.text, text: event.text });
+    pendingUserEchoes += 1;
     try {
       const ack = await activePortal.sendPrompt(event.text);
       if (ack && ack.accepted === false) {
-        pi.appendEntry("pinet.remote", { kind: "system", title: "rejected", body: ack.error ?? "command rejected", error: true });
+        pendingUserEchoes = Math.max(0, pendingUserEchoes - 1);
+        append({ kind: "system", title: "rejected", body: ack.error ?? "command rejected", error: true });
       }
     } catch (error) {
-      pi.appendEntry("pinet.remote", { kind: "system", title: "error", body: String((error as Error)?.message ?? error), error: true });
+      pendingUserEchoes = Math.max(0, pendingUserEchoes - 1);
+      append({ kind: "system", title: "error", body: String((error as Error)?.message ?? error), error: true });
     }
     return { action: "handled" };
   });

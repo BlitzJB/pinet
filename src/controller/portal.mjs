@@ -8,17 +8,20 @@ export function describeEntry(entry) {
   if (entry.type === "message" && entry.message) {
     const message = entry.message;
     const text = contentText(message.content);
-    if (message.role === "user") return { id: entry.id, kind: "user", title: "you", body: text };
+    if (message.role === "user") return { id: entry.id, kind: "user", title: "you", body: text, text };
     if (message.role === "assistant") {
       const tools = Array.isArray(message.content)
-        ? message.content.filter((block) => block?.type === "toolCall").map((block) => `${block.name} ${shorten(JSON.stringify(block.arguments))}`)
+        ? message.content
+            .filter((block) => block?.type === "toolCall")
+            .map((block) => ({ name: block.name, args: shorten(JSON.stringify(block.arguments), 300) }))
         : [];
-      const body = [text, ...tools].filter(Boolean).join("\n");
+      const body = [text, ...tools.map((tool) => `${tool.name} ${tool.args}`)].filter(Boolean).join("\n");
       if (!body.trim()) return null;
-      return { id: entry.id, kind: "assistant", title: "pi", body };
+      return { id: entry.id, kind: "assistant", title: "pi", body, text, tools };
     }
     if (message.role === "toolResult") {
-      return { id: entry.id, kind: "tool", title: message.toolName ?? "tool", body: shorten(firstLines(contentText(message.content), 12)), error: Boolean(message.isError) };
+      const output = contentText(message.content);
+      return { id: entry.id, kind: "tool", title: message.toolName ?? "tool", body: shorten(firstLines(output, 12)), text: output, error: Boolean(message.isError) };
     }
     if (message.role === "custom") return { id: entry.id, kind: "system", title: message.customType ?? "custom", body: shorten(contentText(message.content)) };
     return null;
