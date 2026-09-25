@@ -27,6 +27,9 @@ export const iconSwap =
 export const iconSwapIn = "scale-100 opacity-100 blur-none";
 export const iconSwapOut = "scale-[0.25] opacity-0 blur-[4px]";
 
+export const sidebarAction =
+  "inline-flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] text-muted-foreground outline-none transition-colors hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.98] focus-visible:ring-1 focus-visible:ring-foreground/20 motion-reduce:transition-none";
+
 export const mono = "font-mono text-[11px] tracking-tight";
 
 export const collapsePanel =

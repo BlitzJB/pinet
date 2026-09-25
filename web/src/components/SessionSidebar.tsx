@@ -1,12 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRightIcon, Loader2Icon, MessageSquareIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon } from "lucide-react";
+import { ChevronRightIcon, Loader2Icon, LogOutIcon, MessageSquareIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { getMe, logout, type ServerSession } from "../lib/api";
 import { useConnectionState, usePinet } from "../lib/context";
 import { groupSessionsByHost } from "../lib/session-groups";
 import { cn } from "../lib/utils";
-import { mono } from "./ui/surfaces";
 import { RenameInput } from "./ui/RenameInput";
 import { InstallButton } from "./InstallButton";
 
@@ -25,6 +24,30 @@ function loadCollapsed(): Set<string> {
   } catch {
     return new Set();
   }
+}
+
+/** Deterministic gradient avatar from the account email. */
+function Avatar({ name, email }: { name?: string; email?: string }) {
+  const source = (name?.trim() || email?.split("@")[0] || "?").trim();
+  const initials =
+    source
+      .split(/\s+|[._\-+]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? "")
+      .join("") || "?";
+  const seed = email || source;
+  let hue = 0;
+  for (let index = 0; index < seed.length; index += 1) hue = (hue * 31 + seed.charCodeAt(index)) % 360;
+  return (
+    <span
+      aria-hidden
+      style={{ background: `linear-gradient(140deg, oklch(0.68 0.13 ${hue}), oklch(0.55 0.15 ${(hue + 42) % 360}))` }}
+      className="grid size-8 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white shadow-sm ring-1 ring-inset ring-white/15"
+    >
+      {initials}
+    </span>
+  );
 }
 
 function ConnectionDot() {
@@ -299,25 +322,35 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
         })}
       </div>
 
-      <div className="flex flex-col gap-2 border-t border-sidebar-border px-3 py-3">
-        <div className="truncate text-[11px] text-muted-foreground">{me.data?.email}</div>
-        <InstallButton />
-        <div className="flex items-center gap-2">
-          <Link
-            to="/settings"
-            onClick={onNavigate}
-            className="rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
-          >
-            Settings
-          </Link>
+      <div className="border-t border-sidebar-border p-2.5">
+        <Link
+          to="/settings"
+          onClick={onNavigate}
+          className="group/account flex items-center gap-2.5 rounded-xl p-1.5 transition-colors hover:bg-foreground/[0.04]"
+        >
+          <Avatar name={me.data?.name} email={me.data?.email} />
+          <span className="min-w-0 flex-1 leading-tight">
+            <span className="block truncate text-[12.5px] font-medium text-foreground/90">
+              {me.data?.name?.trim() || me.data?.email?.split("@")[0] || "Account"}
+            </span>
+            <span className="block truncate text-[11px] text-muted-foreground/75" title={me.data?.email}>
+              {me.data?.email}
+            </span>
+          </span>
+          <SettingsIcon className="size-4 shrink-0 text-muted-foreground/40 transition-colors duration-200 group-hover/account:text-muted-foreground" />
+        </Link>
+
+        <div className="mt-1 flex items-center gap-1">
+          <InstallButton />
           <button
             type="button"
             onClick={async () => {
               await logout();
               await queryClient.invalidateQueries({ queryKey: ["me"] });
             }}
-            className={cn(mono, "ml-auto rounded-lg px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground")}
+            className="ms-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] text-muted-foreground outline-none transition-colors hover:bg-destructive/10 hover:text-destructive active:scale-[0.98] focus-visible:ring-1 focus-visible:ring-foreground/20 motion-reduce:transition-none"
           >
+            <LogOutIcon className="size-3.5" />
             Sign out
           </button>
         </div>

@@ -2,9 +2,9 @@ import { useState } from "react";
 import { DownloadIcon, ShareIcon, XIcon } from "lucide-react";
 import { cn } from "../lib/utils";
 import { isIosSafari, isStandalone, useInstallPrompt } from "../lib/pwa";
-import { ghostButton } from "./ui/surfaces";
+import { sidebarAction } from "./ui/surfaces";
 
-export function InstallButton({ className }: { className?: string }) {
+export function InstallButton({ className, block = false }: { className?: string; block?: boolean }) {
   const { canInstall, promptInstall } = useInstallPrompt();
   const [hint, setHint] = useState(false);
   const ios = isIosSafari() && !isStandalone();
@@ -12,14 +12,14 @@ export function InstallButton({ className }: { className?: string }) {
   if (!canInstall && !ios) return null;
 
   return (
-    <div className={cn("relative", className)}>
+    <div className={cn("relative", block && "flex-1", className)}>
       <button
         type="button"
         onClick={() => {
           if (canInstall) void promptInstall();
           else setHint((value) => !value);
         }}
-        className={cn(ghostButton, "h-auto gap-1.5 rounded-lg px-2.5 py-1.5 text-xs")}
+        className={cn(sidebarAction, block && "w-full")}
       >
         {ios ? <ShareIcon className="size-3.5" /> : <DownloadIcon className="size-3.5" />}
         Install app
