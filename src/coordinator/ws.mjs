@@ -147,7 +147,21 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
         return;
       case "session.opened": {
         const session = registry.openSession(ws, data);
-        if (session) broadcastCatalog(auth.accountId);
+        if (!session) return;
+        broadcastCatalog(auth.accountId);
+        // A host process that restarted has no memory of current attachments, so
+        // re-send host.attach for each one; the host wraps the new group key and
+        // pushes a fresh snapshot, letting controllers recover without re-attaching.
+        for (const { attachment, info } of registry.attachmentsFor(session.sessionId)) {
+          const device = accounts.getDevice(info.deviceId);
+          if (!device) continue;
+          send(ws, "host.attach", {
+            sessionId: session.sessionId,
+            attachmentId: attachment.attachmentId,
+            mode: attachment.mode,
+            controller: { deviceId: info.deviceId, identityPub: device.identityPub, encPub: device.encPub },
+          });
+        }
         return;
       }
       case "session.closed": {

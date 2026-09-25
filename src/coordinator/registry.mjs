@@ -128,6 +128,17 @@ export class Registry {
     return attachment;
   }
 
+  /** Every controller attachment to a session, so a (re)connecting host can re-key them. */
+  attachmentsFor(sessionId) {
+    const out = [];
+    for (const info of this.controllers.values()) {
+      if (info.role !== "controller") continue;
+      const attachment = info.attachments.get(sessionId);
+      if (attachment) out.push({ attachment, info });
+    }
+    return out;
+  }
+
   detach(ws, sessionId) {
     const info = this.controllers.get(ws);
     if (!info) return;

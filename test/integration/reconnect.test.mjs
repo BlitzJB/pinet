@@ -17,8 +17,8 @@ afterEach(async () => {
   await coord.close();
 });
 
-function makeHost(name = "host") {
-  const enrolled = enrollDevice(coord.accounts, account.id, "host", name);
+function makeHost(name = "host", reuse) {
+  const enrolled = reuse ?? enrollDevice(coord.accounts, account.id, "host", name);
   const bridge = new HostBridge({
     url: coord.url,
     deviceId: enrolled.device.id,
@@ -28,7 +28,7 @@ function makeHost(name = "host") {
   });
   const store = { entries: [], status: { phase: "idle" } };
   bridge.setSnapshotProvider(() => ({ entries: store.entries, status: store.status, meta: { name } }));
-  return { bridge, store };
+  return { bridge, store, enrolled };
 }
 
 async function makeController(name, reconnect) {
@@ -124,6 +124,34 @@ describe("network resilience", () => {
 
     controller.close();
     bridge.close();
+  });
+
+  it("re-keys an already-attached controller when the host process restarts", async () => {
+    const host1 = makeHost("restart-host");
+    await host1.bridge.connect();
+    host1.bridge.openSession({ sessionId: SESSION, meta: { name: "demo" } });
+    const controller = await makeController("ctl-restart", true);
+    await controller.attach(SESSION, "control");
+    await controller.list();
+
+    // A full process restart: same host identity, brand-new bridge with no
+    // memory of the existing attachment.
+    const key = waitFor(controller, "key", (data) => data.sessionId === SESSION, 15_000);
+    const snapshot = waitFor(controller, "snapshot", () => true, 15_000);
+    host1.bridge.close();
+    const host2 = makeHost("restart-host", host1.enrolled);
+    await host2.bridge.connect();
+    host2.bridge.openSession({ sessionId: SESSION, meta: { name: "demo" } });
+
+    await key;
+    await snapshot;
+
+    host2.bridge.onCommand(async () => ({ accepted: true, mode: "immediate" }));
+    const ack = await controller.command(SESSION, "prompt", { text: "after restart" });
+    expect(ack).toMatchObject({ accepted: true });
+
+    controller.close();
+    host2.bridge.close();
   });
 
   it("does not reconnect when closed deliberately", async () => {

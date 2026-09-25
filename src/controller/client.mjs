@@ -67,6 +67,7 @@ export class PinetController extends Emitter {
       socket.on(type, (data, msg) => this.#enqueue(() => this.#onFrame(type, data, msg)));
     }
     socket.on("session.removed", (data) => this.emit("removed", data));
+    socket.on("session.host", (data) => this.emit("host", data));
     socket.on("cmd.ack", (data) => {
       const waiter = this.commandWaiters.get(data.commandId);
       if (waiter) {
@@ -94,6 +95,9 @@ export class PinetController extends Emitter {
 
   async attach(sessionId, mode = "control") {
     const keyPromise = this.socket.waitFor("e2e.key", { predicate: (data) => data.sessionId === sessionId, timeoutMs: 15_000 });
+    // If the coordinator rejects the attach (e.g. the session is momentarily gone
+    // mid-restart) `attached` times out first; keep `key` from rejecting unhandled.
+    keyPromise.catch(() => {});
     const attachedPromise = this.socket.waitFor("ctl.attached", { predicate: (data) => data.sessionId === sessionId });
     this.socket.send("ctl.attach", { sessionId, mode });
     const attached = await attachedPromise;
