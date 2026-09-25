@@ -46,7 +46,7 @@ describe("Google SSO + MFA login flow", () => {
     expect(result.mfaRequired).toBe(false);
     const session = service.verifySession(result.sessionToken);
     expect(session.accountId).toBe(result.accountId);
-    expect(session.mfa).toBe(true);
+    expect(session.mfa).toBe(false); // no MFA was performed for this account
   });
 
   it("requires MFA after enrollment and blocks the pending token", async () => {

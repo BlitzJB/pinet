@@ -73,8 +73,12 @@ export class Registry {
         subscribers: new Set(),
       };
       this.sessions.set(sessionId, session);
+    } else if (session.accountId !== info.accountId) {
+      // A different account must never rebind or observe this session id.
+      return undefined;
     } else {
-      // Last host to open a given session id wins; fence the previous owner.
+      // Same account: last host to open a given session id wins; fence the
+      // previous owner.
       session.hostWs = ws;
       session.hostDeviceId = info.deviceId;
       session.meta = meta ?? session.meta;
@@ -83,12 +87,14 @@ export class Registry {
     return session;
   }
 
-  closeSession(sessionId) {
+  closeSession(sessionId, ws) {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+    if (!session) return false;
+    if (ws !== undefined && session.hostWs !== ws) return false;
     for (const sub of session.subscribers) sendRaw(sub, "session.removed", { sessionId, reason: "closed" });
     if (session.hostWs) this.hosts.get(session.hostWs)?.sessions.delete(sessionId);
     this.sessions.delete(sessionId);
+    return true;
   }
 
   /** The live host connection currently owning a session, if any. */

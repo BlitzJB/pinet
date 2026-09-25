@@ -5,7 +5,7 @@
 import { EventEmitter } from "node:events";
 import { canonicalJson } from "../common/canonical.mjs";
 import { PinetSocket } from "../common/ws-client.mjs";
-import { verify } from "../crypto/keys.mjs";
+import { verify, sign } from "../crypto/keys.mjs";
 import { commandAad, frameAad, generateGroupKey, openJson, sealJson, wrapGroupKey } from "../crypto/e2e.mjs";
 
 export class HostBridge extends EventEmitter {
@@ -59,16 +59,7 @@ export class HostBridge extends EventEmitter {
     session.seq = 0;
     this.socket.send("session.opened", { sessionId: session.sessionId, meta: session.meta });
     for (const [attachmentId, info] of session.controllers) {
-      const wrapped = wrapGroupKey({
-        recipientEncPub: info.encPub,
-        groupKey: session.groupKey,
-        aadParts: { sessionId: session.sessionId, epoch: session.epoch, deviceId: info.deviceId },
-      });
-      this.socket.send(
-        "e2e.key",
-        { sessionId: session.sessionId, attachmentId, epoch: session.epoch, wrapped },
-        { sessionId: session.sessionId, epoch: session.epoch },
-      );
+      this.#publishKey(session, attachmentId, info);
     }
     const snapshot = this.snapshotProvider() ?? {};
     const seq = (session.seq += 1);
@@ -146,6 +137,24 @@ export class HostBridge extends EventEmitter {
     return this.session;
   }
 
+  #publishKey(session, attachmentId, info) {
+    const wrapped = wrapGroupKey({
+      recipientEncPub: info.encPub,
+      groupKey: session.groupKey,
+      aadParts: { sessionId: session.sessionId, epoch: session.epoch, deviceId: info.deviceId },
+    });
+    // Sign the wrap so a malicious coordinator cannot substitute the group key.
+    const sig = sign(
+      canonicalJson({ type: "e2e.key", sessionId: session.sessionId, attachmentId, epoch: session.epoch, wrapped, deviceId: this.deviceId }),
+      this.identity.privateKey,
+    );
+    this.socket.send(
+      "e2e.key",
+      { sessionId: session.sessionId, attachmentId, epoch: session.epoch, wrapped, deviceId: this.deviceId, sig },
+      { sessionId: session.sessionId, epoch: session.epoch },
+    );
+  }
+
   #onAttach(data) {
     const session = this.session;
     if (!session || data.sessionId !== session.sessionId) return;
@@ -161,16 +170,7 @@ export class HostBridge extends EventEmitter {
       session.groupKey = generateGroupKey();
       session.keyEpoch = session.epoch;
     }
-const wrapped = wrapGroupKey({
-      recipientEncPub: encPub,
-      groupKey: session.groupKey,
-      aadParts: { sessionId: session.sessionId, epoch: session.epoch, deviceId },
-    });
-    this.socket.send(
-      "e2e.key",
-      { sessionId: session.sessionId, attachmentId: data.attachmentId, epoch: session.epoch, wrapped },
-      { sessionId: session.sessionId, epoch: session.epoch },
-    );
+    this.#publishKey(session, data.attachmentId, { deviceId, encPub });
     // Fresh encrypted snapshot for the new controller.
     const snapshot = this.snapshotProvider() ?? {};
     const seq = (session.seq += 1);

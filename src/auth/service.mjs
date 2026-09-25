@@ -7,6 +7,8 @@ import { pkcePair } from "./google.mjs";
 import { issueToken, verifyToken } from "./tokens.mjs";
 
 const USER_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const MAX_PATTERN_LENGTH = 512;
+const MAX_EMAIL_LENGTH = 254;
 
 function generateUserCode() {
   const bytes = randomBytes(8);
@@ -20,19 +22,32 @@ function generateUserCode() {
 
 // Allowed-users gate. `pattern` is a regular expression (string or RegExp)
 // matched case-insensitively against the signed-in email. Unset means allow
-// all; an invalid pattern throws so the hub fails closed at startup.
+// all; an invalid or oversized pattern throws so the hub fails closed at
+// startup. Emails are length-capped before matching to blunt ReDoS.
 export function compileAllowedUsers(pattern) {
   if (pattern === undefined || pattern === null || pattern === "") return undefined;
   if (pattern instanceof RegExp) return pattern;
+  const source = String(pattern);
+  if (source.length > MAX_PATTERN_LENGTH) throw new Error(`allowed-users pattern exceeds ${MAX_PATTERN_LENGTH} characters`);
   try {
-    return new RegExp(String(pattern), "i");
+    return new RegExp(source, "i");
   } catch (error) {
     throw new Error(`invalid allowed-users pattern: ${error.message}`);
   }
 }
 
 export class AuthService {
-  constructor({ accounts, google, sessionSecret, allowedUsers, now = Date.now, pendingTtlMs = 10 * 60_000, sessionTtlMs = 7 * 24 * 3_600_000, stateTtlMs = 10 * 60_000 }) {
+  constructor({
+    accounts,
+    google,
+    sessionSecret,
+    allowedUsers,
+    now = Date.now,
+    pendingTtlMs = 10 * 60_000,
+    sessionTtlMs = 7 * 24 * 3_600_000,
+    stateTtlMs = 10 * 60_000,
+    loginCodeTtlMs = 2 * 60_000,
+  }) {
     this.accounts = accounts;
     this.google = google;
     this.sessionSecret = sessionSecret;
@@ -41,8 +56,10 @@ export class AuthService {
     this.pendingTtlMs = pendingTtlMs;
     this.sessionTtlMs = sessionTtlMs;
     this.stateTtlMs = stateTtlMs;
+    this.loginCodeTtlMs = loginCodeTtlMs;
     this.flows = new Map();
     this.deviceFlows = new Map();
+    this.loginCodes = new Map();
   }
 
   startLogin({ returnTo = "/" } = {}) {
@@ -78,8 +95,7 @@ export class AuthService {
       });
       return { accountId: account.id, mfaRequired: true, returnTo: flow.returnTo, pendingToken, sessionToken: null };
     }
-    const sessionToken = this.#issueSession(account.id);
-    return { accountId: account.id, mfaRequired: false, returnTo: flow.returnTo, pendingToken: null, sessionToken };
+    return { accountId: account.id, mfaRequired: false, returnTo: flow.returnTo, pendingToken: null, sessionToken: this.#issueSession(account.id, false) };
   }
 
   enrollMfa(accountId) {
@@ -98,7 +114,7 @@ export class AuthService {
     if (recoveryCode) ok = this.accounts.useRecoveryCode(accountId, recoveryCode);
     else if (code) ok = this.accounts.verifyMfa(accountId, code);
     if (!ok) throw new Error("invalid MFA code");
-    return { accountId, sessionToken: this.#issueSession(accountId) };
+    return { accountId, sessionToken: this.#issueSession(accountId, true) };
   }
 
   verifySession(token) {
@@ -109,8 +125,28 @@ export class AuthService {
 
   isEmailAllowed(email) {
     if (!this.allowedUsers) return true;
+    const value = String(email ?? "");
+    if (value.length === 0 || value.length > MAX_EMAIL_LENGTH) return false;
     this.allowedUsers.lastIndex = 0;
-    return this.allowedUsers.test(String(email ?? ""));
+    return this.allowedUsers.test(value);
+  }
+
+  // -- one-time login codes (native/loopback CLI login) ---------------------
+
+  issueLoginCode(accountId, mfa) {
+    const code = randomBytes(24).toString("base64url");
+    this.loginCodes.set(code, { accountId, mfa: Boolean(mfa), expiresAt: this.now() + this.loginCodeTtlMs });
+    return code;
+  }
+
+  exchangeLoginCode(code) {
+    const entry = this.loginCodes.get(code);
+    if (!entry || entry.expiresAt < this.now()) {
+      this.loginCodes.delete(code);
+      return undefined;
+    }
+    this.loginCodes.delete(code);
+    return { accountId: entry.accountId, sessionToken: this.#issueSession(entry.accountId, entry.mfa) };
   }
 
   // -- device authorization (for in-pi onboarding) ----------------------
@@ -122,13 +158,13 @@ export class AuthService {
     return { deviceCode, userCode, expiresIn: Math.floor(ttlMs / 1000), interval };
   }
 
-  approveDeviceFlow(userCode, accountId) {
+  approveDeviceFlow(userCode, accountId, mfa) {
     const normalized = String(userCode).trim().toUpperCase();
     for (const flow of this.deviceFlows.values()) {
       if (flow.userCode !== normalized) continue;
       if (flow.status !== "pending" || flow.expiresAt < this.now()) return { ok: false, reason: "expired" };
       flow.status = "approved";
-      flow.sessionToken = this.#issueSession(accountId);
+      flow.sessionToken = this.#issueSession(accountId, Boolean(mfa));
       return { ok: true };
     }
     return { ok: false, reason: "unknown_code" };
@@ -149,9 +185,17 @@ export class AuthService {
     return { status: flow.status === "pending" ? "pending" : "expired" };
   }
 
-  #issueSession(accountId) {
+  /** Drop expired transient state (called periodically by the coordinator). */
+  prune() {
+    const at = this.now();
+    for (const [state, flow] of this.flows) if (flow.expiresAt < at) this.flows.delete(state);
+    for (const [code, flow] of this.deviceFlows) if (flow.expiresAt < at) this.deviceFlows.delete(code);
+    for (const [code, entry] of this.loginCodes) if (entry.expiresAt < at) this.loginCodes.delete(code);
+  }
+
+  #issueSession(accountId, mfa) {
     return issueToken({
-      payload: { kind: "session", accountId, mfa: true },
+      payload: { kind: "session", accountId, mfa: Boolean(mfa) },
       secret: this.sessionSecret,
       ttlMs: this.sessionTtlMs,
       now: this.now(),

@@ -11,6 +11,8 @@ import { Registry } from "./registry.mjs";
 
 const CHALLENGE_TIMEOUT_MS = 15_000;
 const MAX_CLOCK_SKEW_MS = 60_000;
+const PENDING_COMMAND_TTL_MS = 5 * 60_000;
+const MAX_PENDING_COMMANDS = 10_000;
 
 function send(ws, type, data = {}, route) {
   if (ws?.readyState !== 1) return;
@@ -19,10 +21,27 @@ function send(ws, type, data = {}, route) {
   ws.send(JSON.stringify(msg));
 }
 
-export function createGateway({ server, accounts, serverId, now = Date.now, registry = new Registry() }) {
-  const wss = new WebSocketServer({ server, path: "/ws" });
-  const pendingCommands = new Map(); // commandId -> controller ws
+export function createGateway({ server, accounts, serverId, now = Date.now, registry = new Registry(), allowedOrigins = [] }) {
+  const wss = new WebSocketServer({
+    server,
+    path: "/ws",
+    verifyClient: (info, callback) => {
+      const origin = info.origin;
+      // Native clients send no Origin header; browser clients must match an
+      // allowed origin (defence against cross-site WebSocket hijacking).
+      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) return callback(true);
+      callback(false, 403, "forbidden origin");
+    },
+  });
+  const pendingCommands = new Map(); // commandId -> { ws, at }
   const state = new WeakMap(); // ws -> auth state
+
+  const pendingTimer = setInterval(() => {
+    const cutoff = now() - PENDING_COMMAND_TTL_MS;
+    for (const [id, entry] of pendingCommands) if (entry.at < cutoff) pendingCommands.delete(id);
+  }, 60_000);
+  pendingTimer.unref?.();
+  wss.on("close", () => clearInterval(pendingTimer));
 
   wss.on("connection", (ws) => {
     const auth = { stage: "challenge", nonce: newNonce(), device: null, role: null, accountId: null };
@@ -56,6 +75,7 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
         else registry.unregisterController(ws);
         console.log(`[hub] ${current.role} disconnected ${current.deviceId}`, registry.stats());
       }
+      for (const [id, entry] of pendingCommands) if (entry.ws === ws) pendingCommands.delete(id);
     });
   });
 
@@ -131,7 +151,7 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
         return;
       }
       case "session.closed": {
-        registry.closeSession(data.sessionId);
+        registry.closeSession(data.sessionId, ws);
         broadcastCatalog(auth.accountId);
         return;
       }
@@ -151,16 +171,17 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
         return;
       }
       case "e2e.key": {
+        if (!registry.ownsSession(ws, data.sessionId)) return;
         const attachment = registry.getAttachment(data.attachmentId);
         if (!attachment || attachment.sessionId !== data.sessionId) return;
         send(attachment.ws, "e2e.key", data, { sessionId: data.sessionId, epoch: data.epoch });
         return;
       }
       case "cmd.ack": {
-        const controllerWs = pendingCommands.get(data.commandId);
-        if (!controllerWs) return;
+        const pending = pendingCommands.get(data.commandId);
+        if (!pending) return;
         pendingCommands.delete(data.commandId);
-        send(controllerWs, "cmd.ack", data);
+        send(pending.ws, "cmd.ack", data);
         return;
       }
       case "host.attached":
@@ -184,8 +205,16 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
         }
         const mode = data.mode === "read" ? "read" : "control";
         const attachment = registry.attach(ws, data.sessionId, mode);
-        send(ws, "ctl.attached", { sessionId: data.sessionId, attachmentId: attachment.attachmentId, mode, epoch: session.epoch });
         const host = registry.hostFor(data.sessionId);
+        const hostDevice = host ? accounts.getDevice(host.deviceId) : undefined;
+        send(ws, "ctl.attached", {
+          sessionId: data.sessionId,
+          attachmentId: attachment.attachmentId,
+          mode,
+          epoch: session.epoch,
+          hostId: host?.deviceId ?? session.hostDeviceId,
+          hostIdentityPub: hostDevice?.identityPub ?? null,
+        });
         if (host) {
           send(host.ws, "host.attach", {
             sessionId: data.sessionId,
@@ -221,7 +250,11 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
           send(ws, "cmd.ack", { commandId: data.commandId, accepted: false, mode: null, error: "host_unavailable" });
           return;
         }
-        pendingCommands.set(data.commandId, ws);
+        if (pendingCommands.size >= MAX_PENDING_COMMANDS) {
+          send(ws, "cmd.ack", { commandId: data.commandId, accepted: false, mode: null, error: "too_many_pending" });
+          return;
+        }
+        pendingCommands.set(data.commandId, { ws, at: now() });
         send(host.ws, "cmd.deliver", {
           sessionId: data.sessionId,
           attachmentId: attachment.attachmentId,

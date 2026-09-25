@@ -38,3 +38,14 @@ export function ecdh(privateKeyB64, publicKeyB64) {
 export function fingerprint(publicKeyB64) {
   return createHash("sha256").update(Buffer.from(publicKeyB64, "base64")).digest("hex");
 }
+
+/** Validate a base64 DER SPKI public key is the expected algorithm. */
+export function isValidPublicKey(publicKeyB64, type) {
+  if (typeof publicKeyB64 !== "string" || publicKeyB64.length === 0 || publicKeyB64.length > 4096) return false;
+  try {
+    const key = createPublicKey({ key: Buffer.from(publicKeyB64, "base64"), format: "der", type: "spki" });
+    return key.asymmetricKeyType === type;
+  } catch {
+    return false;
+  }
+}

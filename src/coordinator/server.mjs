@@ -44,7 +44,30 @@ export async function createCoordinator({ config = configFromEnv(), accounts, go
   const authService = new AuthService({ accounts: store, google: googleClient, sessionSecret: config.sessionSecret, allowedUsers: config.allowedUsers });
   const handler = createHttpHandler({ accounts: store, authService, publicUrl, webDir: config.webDir });
   server.on("request", (req, res) => void handler(req, res));
-  const gateway = createGateway({ server, accounts: store, serverId: config.serverId });
+  const publicOrigin = (() => {
+    try {
+      return new URL(publicUrl).origin;
+    } catch {
+      return undefined;
+    }
+  })();
+  const allowedOrigins = [
+    publicOrigin,
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8787",
+    "http://127.0.0.1:8787",
+  ].filter(Boolean);
+  const gateway = createGateway({ server, accounts: store, serverId: config.serverId, allowedOrigins });
+  const pruneTimer = setInterval(() => {
+    try {
+      authService.prune();
+      store.prune();
+    } catch {
+      /* ignore */
+    }
+  }, 60_000);
+  pruneTimer.unref?.();
   return {
     accounts: store,
     authService,
@@ -55,6 +78,7 @@ export async function createCoordinator({ config = configFromEnv(), accounts, go
     wsUrl: `ws://${base}:${port}/ws`,
     publicUrl,
     close: async () => {
+      clearInterval(pruneTimer);
       await gateway.close();
       server.closeAllConnections?.();
       await new Promise((resolve) => server.close(resolve));

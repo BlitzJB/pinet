@@ -54,14 +54,28 @@ function openBrowser(url) {
 
 async function login() {
   const http = process.env.PINET_HTTP ?? loadConfig().http ?? DEFAULT_HTTP;
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
-    const token = url.searchParams.get("session_token");
+    const code = url.searchParams.get("code");
+    const legacyToken = url.searchParams.get("session_token");
     res.writeHead(200, { "content-type": "text/html" });
     res.end("<h2>Pinet</h2><p>Login complete. You can close this tab.</p>");
-    if (token) {
+    let sessionToken = legacyToken ?? undefined;
+    if (!sessionToken && code) {
+      try {
+        const response = await fetch(`${http}/auth/cli/exchange`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ code }),
+        });
+        if (response.ok) sessionToken = (await response.json()).sessionToken;
+      } catch {
+        /* fall through to error */
+      }
+    }
+    if (sessionToken) {
       const config = loadConfig();
-      saveConfig({ ...config, hub: config.hub ?? DEFAULT_HUB, http, sessionToken: token });
+      saveConfig({ ...config, hub: config.hub ?? DEFAULT_HUB, http, sessionToken });
       console.log(C.green("login complete"));
       server.close();
       process.exit(0);

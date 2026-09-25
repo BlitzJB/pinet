@@ -25,6 +25,7 @@ export class PinetController extends Emitter {
     this.attached = new Map(); // sessionId -> mode
     this.commandWaiters = new Map();
     this.snapshots = new Map();
+    this.hostKeys = new Map();
     this.queue = Promise.resolve();
   }
 
@@ -55,6 +56,7 @@ export class PinetController extends Emitter {
     socket.on("reconnected", () => void this.#resync());
 
     socket.on("e2e.key", (data) => this.#enqueue(() => this.#onKey(data)));
+    socket.on("ctl.attached", (data) => this.#rememberHost(data));
     for (const type of ["session.snapshot", "session.rebase", "session.entries", "session.status", "session.meta"]) {
       socket.on(type, (data, msg) => this.#enqueue(() => this.#onFrame(type, data, msg)));
     }
@@ -175,8 +177,32 @@ export class PinetController extends Emitter {
     this.emit("resynced", { sessions: entries.map(([id]) => id) });
   }
 
+  // Verify the host-signed key wrap (when present) and pin the host identity
+  // on first use, so a hostile coordinator cannot substitute the group key.
   async #onKey(data) {
     const { sessionId, epoch } = data;
+    const pinned = this.hostKeys.get(sessionId);
+    if (data.sig && data.deviceId && pinned) {
+      const expected = canonicalJson({
+        type: "e2e.key",
+        sessionId,
+        attachmentId: data.attachmentId,
+        epoch,
+        wrapped: data.wrapped,
+        deviceId: data.deviceId,
+      });
+      let ok = false;
+      try {
+        const handle = await this.cryptoProvider.importPublicKey(pinned, "identity");
+        ok = await this.cryptoProvider.verify(expected, data.sig, handle);
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        this.emit("security", { sessionId, reason: "invalid_host_signature" });
+        return;
+      }
+    }
     const key = await unwrapGroupKey(this.cryptoProvider, {
       recipientEncPriv: this.encryption.privateKey,
       hostEphPub: data.wrapped.hostEphPub,
@@ -186,6 +212,16 @@ export class PinetController extends Emitter {
     this.keys.set(sessionId, { epoch, key });
     this.epochs.set(sessionId, epoch);
     this.emit("key", { sessionId, epoch });
+  }
+
+  #rememberHost(data) {
+    if (!data?.sessionId || !data?.hostIdentityPub) return;
+    const existing = this.hostKeys.get(data.sessionId);
+    if (existing && existing !== data.hostIdentityPub) {
+      this.emit("security", { sessionId: data.sessionId, reason: "host_key_changed" });
+      return;
+    }
+    this.hostKeys.set(data.sessionId, data.hostIdentityPub);
   }
 
   async #onFrame(type, data, msg) {

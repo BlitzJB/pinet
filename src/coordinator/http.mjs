@@ -3,10 +3,15 @@
 
 import { readFile, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { isValidPublicKey } from "../crypto/keys.mjs";
 import { qrSvg } from "./qr.mjs";
+import { createRateLimiter } from "./rate-limit.mjs";
 
 const DEFAULT_WEB_DIR = fileURLToPath(new URL("../../web/dist/", import.meta.url));
+const MAX_BODY_BYTES = 64 * 1024;
+const MAX_NAME_LENGTH = 120;
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -29,6 +34,23 @@ const CONTENT_TYPES = {
 
 function contentType(path) {
   return CONTENT_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
+}
+
+function securityHeaders(req, publicUrl) {
+  const https =
+    String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim() === "https" ||
+    (publicUrl ?? "").startsWith("https://");
+  const headers = {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "cross-origin-opener-policy": "same-origin",
+    "content-security-policy":
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  };
+  if (https) headers["strict-transport-security"] = "max-age=31536000; includeSubDomains";
+  return headers;
 }
 
 /** Serve the built SPA from webDir, with an index.html fallback for client routes. */
@@ -70,9 +92,8 @@ async function serveWebApp(res, webDir, pathname) {
 }
 
 function json(res, status, body, headers = {}) {
-  const payload = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json", ...headers });
-  res.end(payload);
+  res.end(JSON.stringify(body));
 }
 
 function redirect(res, location, headers = {}) {
@@ -96,9 +117,29 @@ function setCookie(name, value, { maxAge = 604800, secure = false } = {}) {
   return attrs.join("; ");
 }
 
+function isHttps(req, publicUrl) {
+  return (
+    String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim() === "https" ||
+    (publicUrl ?? "").startsWith("https://")
+  );
+}
+
+function clientIp(req) {
+  return String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket?.remoteAddress || "unknown";
+}
+
 async function readBody(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) {
+      const error = new Error("payload too large");
+      error.status = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   if (!raw) return {};
   const type = req.headers["content-type"] ?? "";
@@ -135,6 +176,21 @@ function isAllowedReturnTo(value) {
   }
 }
 
+function isLoopbackReturnTo(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost");
+  } catch {
+    return false;
+  }
+}
+
+function withQuery(value, key, replacement) {
+  const url = new URL(value, "http://localhost");
+  url.searchParams.set(key, replacement);
+  return url.toString();
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/gu, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 }
@@ -153,23 +209,25 @@ function page(title, body) {
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><body style="font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem;line-height:1.5">${body}</body>`;
 }
 
-function accountPage(account, notice) {
-  const mfa = account.mfa.enrolled ? "<b>enabled</b>" : "not set up";
+function mfaPage(pending, returnTo) {
   return page(
-    "Pinet",
-    `<h1>Pinet</h1>
-     <p>Signed in as <b>${escapeHtml(account.email)}</b></p>
-     ${notice ? `<p style="color:#137333">${escapeHtml(notice)}</p>` : ""}
-     <ul><li>Multi-factor (authenticator app): ${mfa}</li></ul>
-     ${account.mfa.enrolled ? "" : `<p><a href="/auth/mfa/setup">Set up an authenticator app</a></p>`}
-     <form method="post" action="/auth/logout"><button type="submit">Sign out</button></form>`,
+    "Pinet — verify",
+    `<h1>Verify it's you</h1>
+     <form method="post" action="/auth/mfa/verify">
+       <input type="hidden" name="pending" value="${escapeHtml(pending)}"/>
+       <input type="hidden" name="return_to" value="${escapeHtml(returnTo)}"/>
+       <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" autofocus/>
+       <button type="submit">Verify</button>
+     </form>`,
   );
 }
 
 function mfaSetupPage({ email, secret, uri, recoveryCodes, error }) {
   const grouped = secret.replace(/(.{4})/gu, "$1 ").trim();
   const qr = qrSvg(uri, { cellSize: 4, margin: 2 });
-  const codes = recoveryCodes ? `<h3>Recovery codes</h3><p>Save these now. Each works once.</p><pre>${recoveryCodes.map(escapeHtml).join("\n")}</pre>` : `<p><em>Recovery codes were shown when you first opened this page.</em></p>`;
+  const codes = recoveryCodes
+    ? `<h3>Recovery codes</h3><p>Save these now. Each works once.</p><pre>${recoveryCodes.map(escapeHtml).join("\n")}</pre>`
+    : `<p><em>Recovery codes were shown when you first opened this page.</em></p>`;
   return page(
     "Pinet — set up MFA",
     `<h1>Set up multi-factor authentication</h1>
@@ -187,7 +245,14 @@ function mfaSetupPage({ email, secret, uri, recoveryCodes, error }) {
   );
 }
 
+function validKeys(body) {
+  return isValidPublicKey(body.identityPub, "ed25519") && isValidPublicKey(body.encPub, "x25519");
+}
+
 export function createHttpHandler({ accounts, authService, publicUrl, webDir = DEFAULT_WEB_DIR }) {
+  const globalLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
+  const sensitiveLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+
   function session(req) {
     const auth = req.headers.authorization ?? "";
     const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : undefined;
@@ -197,9 +262,22 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
   }
 
   return async function handle(req, res) {
+    // Attach security headers to every response.
+    const baseHeaders = securityHeaders(req, publicUrl);
+    const originalWriteHead = res.writeHead.bind(res);
+    res.writeHead = (status, headers) =>
+      originalWriteHead(status, { ...baseHeaders, ...(headers && typeof headers === "object" ? headers : {}) });
+
     const url = new URL(req.url, "http://localhost");
     const route = `${req.method} ${url.pathname}`;
     try {
+      // Rate limiting.
+      const ip = clientIp(req);
+      if (!globalLimiter.check(`all:${ip}`)) return json(res, 429, { error: "rate_limited" });
+      if (/^\/(auth|devices|hosts)\b/u.test(url.pathname) && !sensitiveLimiter.check(`auth:${ip}`)) {
+        return json(res, 429, { error: "rate_limited" });
+      }
+
       if (route === "GET /health") return json(res, 200, { ok: true });
 
       // ---- web app (Vite SPA) ----
@@ -237,7 +315,7 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
           return redirect(res, target);
         }
         if (wantsJson(req, url)) return json(res, 200, { mfaRequired: false, sessionToken: result.sessionToken, returnTo });
-        return redirect(res, appendToken(returnTo, result.sessionToken), { "set-cookie": setCookie("pinet_session", result.sessionToken) });
+        return finishBrowserLogin(req, res, returnTo, result.accountId, result.sessionToken, false);
       }
 
       if (route === "POST /auth/mfa/verify") {
@@ -248,23 +326,23 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
           code: body.code,
           recoveryCode: body.recoveryCode,
         });
-        const returnTo = isAllowedReturnTo(body.return_to ?? url.searchParams.get("return_to") ?? "/");
         if (wantsJson(req, url)) return json(res, 200, { sessionToken, accountId });
-        return redirect(res, appendToken(returnTo, sessionToken), { "set-cookie": setCookie("pinet_session", sessionToken) });
+        const returnTo = isAllowedReturnTo(body.return_to ?? url.searchParams.get("return_to") ?? "/");
+        return finishBrowserLogin(req, res, returnTo, accountId, sessionToken, true);
+      }
+
+      if (route === "POST /auth/cli/exchange") {
+        const body = await readBody(req);
+        const result = authService.exchangeLoginCode(String(body.code ?? ""));
+        if (!result) return json(res, 400, { error: "invalid_code" });
+        return json(res, 200, { sessionToken: result.sessionToken, accountId: result.accountId });
       }
 
       if (route === "GET /auth/mfa") {
         const pending = url.searchParams.get("pending") ?? "";
         const returnTo = url.searchParams.get("return_to") ?? "/";
         res.writeHead(200, { "content-type": "text/html" });
-        res.end(
-          `<form method="post" action="/auth/mfa/verify">
-             <input type="hidden" name="pending" value="${pending}"/>
-             <input type="hidden" name="return_to" value="${returnTo}"/>
-             <input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456"/>
-             <button type="submit">Verify</button>
-           </form>`,
-        );
+        res.end(mfaPage(pending, returnTo));
         return;
       }
 
@@ -296,7 +374,7 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
       if (route === "POST /auth/device/approve") {
         if (!current) return json(res, 401, { error: "unauthorized" });
         const body = await readBody(req);
-        const result = authService.approveDeviceFlow(String(body.userCode ?? ""), current.accountId);
+        const result = authService.approveDeviceFlow(String(body.userCode ?? ""), current.accountId, current.mfa);
         if (!result.ok) return json(res, result.reason === "unknown_code" ? 404 : 400, { ok: false, reason: result.reason });
         if (wantsJson(req, url)) return json(res, 200, { ok: true });
         res.writeHead(200, { "content-type": "text/html" });
@@ -366,11 +444,11 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
 
       if (route === "POST /devices/register") {
         const body = await readBody(req);
-        if (!body.identityPub || !body.encPub) return json(res, 400, { error: "missing keys" });
+        if (!validKeys(body)) return json(res, 400, { error: "invalid_keys" });
         const device = accounts.registerDevice({
           accountId: current.accountId,
           kind: body.kind === "host" ? "host" : "controller",
-          name: body.name ?? "device",
+          name: String(body.name ?? "device").slice(0, MAX_NAME_LENGTH),
           identityPub: body.identityPub,
           encPub: body.encPub,
         });
@@ -406,11 +484,11 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
         const body = await readBody(req);
         const consumed = accounts.consumeHostEnrollment(String(body.code ?? "").trim().toUpperCase());
         if (!consumed) return json(res, 400, { error: "invalid_or_expired_code" });
-        if (!body.identityPub || !body.encPub) return json(res, 400, { error: "missing keys" });
+        if (!validKeys(body)) return json(res, 400, { error: "invalid_keys" });
         const device = accounts.registerDevice({
           accountId: consumed.accountId,
           kind: "host",
-          name: body.name ?? "host",
+          name: String(body.name ?? "host").slice(0, MAX_NAME_LENGTH),
           identityPub: body.identityPub,
           encPub: body.encPub,
         });
@@ -420,22 +498,23 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
       // ---- landing page ----
       if (route === "GET /") return redirect(res, "/app/");
 
-      return json(res, 404, { error: "not_found", route });
+      return json(res, 404, { error: "not_found" });
     } catch (error) {
-      return json(res, 500, { error: String(error?.message ?? error) });
+      if (error?.status) return json(res, error.status, { error: error.status === 413 ? "payload_too_large" : "error" });
+      const id = randomUUID().slice(0, 8);
+      console.error(`[hub] request error (${id}):`, error?.message ?? error);
+      return json(res, 500, { error: "internal_error", id });
     }
   };
-}
 
-function appendToken(returnTo, token) {
-  if (!token) return returnTo;
-  if (returnTo.startsWith("/")) {
-    const [path, query] = returnTo.split("?");
-    const params = new URLSearchParams(query ?? "");
-    params.set("session_token", token);
-    return `${path}?${params.toString()}`;
+  /** Set the session cookie and redirect — never place the token in the URL.
+   *  Native/CLI loopback logins receive a single-use code they exchange. */
+  function finishBrowserLogin(req, res, returnTo, accountId, sessionToken, mfa) {
+    const headers = { "set-cookie": setCookie("pinet_session", sessionToken, { secure: isHttps(req, publicUrl) }) };
+    if (isLoopbackReturnTo(returnTo)) {
+      const code = authService.issueLoginCode(accountId, mfa);
+      return redirect(res, withQuery(returnTo, "code", code), headers);
+    }
+    return redirect(res, returnTo, headers);
   }
-  const url = new URL(returnTo, "http://localhost");
-  url.searchParams.set("session_token", token);
-  return url.toString();
 }

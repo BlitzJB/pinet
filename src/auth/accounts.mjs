@@ -206,6 +206,19 @@ export class AccountStore {
     return { accountId: entry.accountId };
   }
 
+  /** Drop expired host-enrollment codes (called periodically). */
+  prune() {
+    const at = this.now();
+    let changed = false;
+    for (const [code, entry] of this.enrollments) {
+      if (entry.expiresAt < at) {
+        this.enrollments.delete(code);
+        changed = true;
+      }
+    }
+    if (changed) this.#save();
+  }
+
   #require(accountId) {
     const account = this.accounts.get(accountId);
     if (!account) throw new Error(`unknown account: ${accountId}`);
