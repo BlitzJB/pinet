@@ -147,8 +147,15 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
         return;
       case "session.opened": {
         const session = registry.openSession(ws, data);
-        if (!session) return;
+        if (!session) {
+          // Either the connection is not a host, or an existing session with this
+          // id belongs to another account. Log it: registrations used to fail here
+          // completely silently.
+          console.log(`[hub] session.rejected ${data?.sessionId} from ${auth.deviceId}`, registry.stats());
+          return;
+        }
         broadcastCatalog(auth.accountId);
+        console.log(`[hub] session.opened ${session.sessionId} by ${auth.deviceId}`, registry.stats());
         // A host process that restarted has no memory of current attachments, so
         // re-send host.attach for each one; the host wraps the new group key and
         // pushes a fresh snapshot, letting controllers recover without re-attaching.

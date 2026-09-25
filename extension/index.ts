@@ -13,6 +13,7 @@
  */
 
 import { hostname } from "node:os";
+import { appendFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { HostBridge } from "../src/host/bridge.mjs";
 import { createSerialQueue } from "../src/host/command-queue.mjs";
@@ -78,6 +79,38 @@ export default function pinet(pi: Pi): void {
       ctx?.ui.notify(message, type);
     } catch {
       /* no UI */
+    }
+  }
+
+  /**
+   * Lifecycle trace, appended to `<dir>/host.log`. Small (a handful of lines per
+   * process) and invaluable when a host connects but never registers a session.
+   */
+  function trace(stage: string, detail = ""): void {
+    try {
+      appendFileSync(`${dir}/host.log`, `${new Date().toISOString()} ${stage}${detail ? ` ${detail}` : ""}\n`, { mode: 0o600 });
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /**
+   * Startup/registration failures used to be swallowed by a bare catch, which
+   * made a host that connected but never registered impossible to diagnose.
+   * Log to the host dir (and stderr) so `~/.pinet/error.log` tells the story.
+   */
+  function reportError(stage: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    trace(`error ${stage}`, message);
+    try {
+      appendFileSync(`${dir}/error.log`, `${new Date().toISOString()} ${stage}: ${message}\n`, { mode: 0o600 });
+    } catch {
+      /* best effort */
+    }
+    try {
+      console.error(`[pinet] ${stage}: ${message}`);
+    } catch {
+      /* no console */
     }
   }
 
@@ -155,16 +188,25 @@ export default function pinet(pi: Pi): void {
   }
 
   function registerSession(ctx: ExtensionContext): void {
-    if (!bridge || !ctx) return;
-    spawner.cwd = ctx.cwd;
-    void detectGit(ctx.cwd).then((isGit) => {
-      spawner.git = isGit;
-    });
-    sessionId = ctx.sessionManager.getSessionId();
-    bridge.setSnapshotProvider(() => snapshot(ctx));
-    bridge.openSession({ sessionId, meta: buildMeta(ctx) });
-    safe(() => bridge?.publishSnapshot(snapshot(ctx)));
-    safe(() => bridge?.publishStatus(buildStatus(ctx)));
+    if (!bridge || !ctx) {
+      trace("registerSession skipped", `bridge=${Boolean(bridge)} ctx=${Boolean(ctx)}`);
+      return;
+    }
+    try {
+      spawner.cwd = ctx.cwd;
+      void detectGit(ctx.cwd).then((isGit) => {
+        spawner.git = isGit;
+      });
+      sessionId = ctx.sessionManager.getSessionId();
+      bridge.setSnapshotProvider(() => snapshot(ctx));
+      bridge.openSession({ sessionId, meta: buildMeta(ctx) });
+      trace("registerSession", sessionId);
+      safe(() => bridge?.publishSnapshot(snapshot(ctx)));
+      safe(() => bridge?.publishStatus(buildStatus(ctx)));
+    } catch (error) {
+      sessionId = undefined;
+      reportError("registerSession", error);
+    }
   }
 
   // -- commands from controllers --------------------------------------------
@@ -289,11 +331,17 @@ export default function pinet(pi: Pi): void {
       pi.events.emit("pinet:status", { connected: false, reason: "closed" });
     });
     await hostBridge.connect();
+    trace("bridge connected", `activeCtx=${Boolean(activeCtx)} sessionId=${sessionId ?? "-"}`);
+    // Server-side error frames (rejected sessions, internal errors) are otherwise
+    // dropped silently by the socket client.
+    hostBridge.socket?.on("error", (data: unknown) => reportError("hub", JSON.stringify(data)));
+    hostBridge.on("reconnecting", (info: { delayMs: number }) => pi.events.emit("pinet:status", { connected: false, reason: `reconnecting in ${Math.round(info.delayMs / 1000)}s` }));
     bridge = hostBridge;
     if (activeCtx && !sessionId) registerSession(activeCtx);
   }
 
   async function autoStart(): Promise<void> {
+    trace("autoStart");
     try {
       const state = loadHostState(dir);
       if (state.hostId && state.identity && state.encryption) {
@@ -313,8 +361,8 @@ export default function pinet(pi: Pi): void {
         await connectBridge();
         return;
       }
-    } catch {
-      /* startup is best-effort; run /pinet status for the reason */
+    } catch (error) {
+      reportError("autoStart", error);
     }
   }
 
@@ -391,6 +439,7 @@ export default function pinet(pi: Pi): void {
   // -- events ---------------------------------------------------------------
 
   pi.on("session_start", async (_event, ctx) => {
+    trace("session_start", `bridge=${Boolean(bridge)} sessionId=${sessionId ?? "-"}`);
     activeCtx = ctx;
     if (bridge && !sessionId) registerSession(ctx);
   });
@@ -486,4 +535,5 @@ export default function pinet(pi: Pi): void {
   });
 
   void autoStart();
+  trace("extension loaded");
 }
