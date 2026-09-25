@@ -296,6 +296,9 @@ export class PinetConnection {
   /** Ask a host to spawn a new session (session/worktree spawn mode). */
   async spawn(sessionId: string, options: { name?: string; mode?: string } = {}): Promise<{ sessionId?: string; name?: string }> {
     if (!this.controller) throw new Error("not connected");
+    // Commands need the session group key. The sidebar can trigger a spawn
+    // before the session view has finished attaching, so make sure first.
+    if (!this.store(sessionId).get().attached) await this.attach(sessionId, "control");
     const ack = (await this.controller.command(sessionId, "spawn", options)) as
       | { accepted?: boolean; error?: string; data?: { sessionId?: string; name?: string } }
       | undefined;

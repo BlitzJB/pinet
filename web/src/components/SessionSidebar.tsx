@@ -99,7 +99,8 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
 
   async function submitSpawn(event: FormEvent, group: { hostId: string; sessions: ServerSession[] }) {
     event.preventDefault();
-    const target = group.sessions[0]?.sessionId;
+    const target =
+      group.sessions.find((session) => session.sessionId === activeSessionId)?.sessionId ?? group.sessions[0]?.sessionId;
     if (!target) return;
     setSpawnBusy(true);
     setSpawnError(null);

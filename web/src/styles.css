@@ -167,7 +167,10 @@ body {
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
-  color: transparent;
+  /* `color: transparent` would make the gradient's `currentColor` resolve to
+     transparent too (the text vanished). Keep `color` intact and only make the
+     glyph fill transparent so the gradient shows through. */
+  -webkit-text-fill-color: transparent;
   animation: aui-shimmer 1.8s linear infinite;
 }
 

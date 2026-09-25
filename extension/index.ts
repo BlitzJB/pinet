@@ -72,13 +72,6 @@ export default function pinet(pi: Pi): void {
     spawner.tmux = tmux;
   });
 
-  function setStatus(ctx: ExtensionContext | undefined, text: string | undefined): void {
-    try {
-      ctx?.ui.setStatus("pinet", text);
-    } catch {
-      /* no UI */
-    }
-  }
 
   function notify(ctx: ExtensionContext | undefined, message: string, type: "info" | "warning" | "error" = "info"): void {
     try {
@@ -286,22 +279,17 @@ export default function pinet(pi: Pi): void {
     });
     hostBridge.onCommand((command) => queue.run(() => handleCommand(command)));
     hostBridge.on("disconnected", () => {
-      setStatus(activeCtx, "pinet: reconnecting…");
       pi.events.emit("pinet:status", { connected: false, reason: "disconnected" });
     });
-    hostBridge.on("reconnecting", (info: { delayMs: number }) => setStatus(activeCtx, `pinet: reconnecting in ${Math.round(info.delayMs / 1000)}s`));
     hostBridge.on("reconnected", () => {
-      setStatus(activeCtx, "pinet: connected");
       pi.events.emit("pinet:status", { connected: true, reason: "reconnected" });
       if (activeCtx && !sessionId) registerSession(activeCtx);
     });
     hostBridge.on("closed", () => {
-      setStatus(activeCtx, "pinet: disconnected");
       pi.events.emit("pinet:status", { connected: false, reason: "closed" });
     });
     await hostBridge.connect();
     bridge = hostBridge;
-    setStatus(activeCtx, "pinet: connected");
     if (activeCtx && !sessionId) registerSession(activeCtx);
   }
 
@@ -325,9 +313,8 @@ export default function pinet(pi: Pi): void {
         await connectBridge();
         return;
       }
-      setStatus(activeCtx, "pinet: not set up — run /pinet setup");
-    } catch (error) {
-      setStatus(activeCtx, `pinet: error — ${String((error as Error)?.message ?? error)}`);
+    } catch {
+      /* startup is best-effort; run /pinet status for the reason */
     }
   }
 
@@ -355,7 +342,6 @@ export default function pinet(pi: Pi): void {
         bridge?.close();
         bridge = undefined;
         clearHostState(dir);
-        setStatus(ctx, "pinet: logged out");
         notify(ctx, "Pinet: host identity cleared.", "warning");
         return;
       }
@@ -377,12 +363,10 @@ export default function pinet(pi: Pi): void {
           // Idempotent: if already enrolled, just reconnect with the stored
           // identity instead of creating another device.
           if (state.hostId) {
-            setStatus(ctx, "pinet: reconnecting…");
             await connectBridge(true);
             notify(ctx, `Pinet: already set up as ${state.hostId}`, "info");
             return;
           }
-          setStatus(ctx, "pinet: waiting for browser approval…");
           const result = await onboardHost({
             httpUrl,
             dir,
@@ -391,13 +375,10 @@ export default function pinet(pi: Pi): void {
               notify(ctx, `Pinet setup\n\n1. Open: ${verificationUri}\n2. Sign in (Google + MFA)\n3. Enter code: ${userCode}`, "info");
               openUrl(verificationUri);
             },
-            onTick: () => setStatus(ctx, "pinet: waiting for browser approval…"),
           });
-          setStatus(ctx, "pinet: connecting…");
           await connectBridge(true);
           notify(ctx, `Pinet: enrolled as ${result.hostId}\nFingerprint: ${String(result.fingerprint).slice(0, 16)}`, "info");
         } catch (error) {
-          setStatus(ctx, "pinet: setup failed");
           notify(ctx, `Pinet setup failed: ${String((error as Error)?.message ?? error)}`, "error");
         }
         return;
@@ -412,7 +393,6 @@ export default function pinet(pi: Pi): void {
   pi.on("session_start", async (_event, ctx) => {
     activeCtx = ctx;
     if (bridge && !sessionId) registerSession(ctx);
-    else if (!bridge) setStatus(ctx, "pinet: not connected");
   });
 
   pi.on("session_shutdown", async () => {

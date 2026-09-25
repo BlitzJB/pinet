@@ -17,8 +17,6 @@ import { PinetController } from "../src/controller/client.mjs";
 import { createPortal } from "../src/controller/portal.mjs";
 import {
   clearControllerState,
-  controllerStatePath,
-  ensureControllerKeys,
   loadControllerState,
   onboardController,
 } from "../src/host/onboarding.mjs";
@@ -106,13 +104,6 @@ export default function portal(pi: Pi): void {
   let activeSession: string | undefined;
   let activeCtx: ExtensionContext | undefined;
 
-  function setStatus(ctx: ExtensionContext | undefined, text: string | undefined): void {
-    try {
-      ctx?.ui.setStatus("pinet-portal", text);
-    } catch {
-      /* no UI */
-    }
-  }
 
   function notify(ctx: ExtensionContext | undefined, message: string, type: "info" | "warning" | "error" = "info"): void {
     try {
@@ -152,13 +143,9 @@ export default function portal(pi: Pi): void {
       deviceName: hostname(),
       reconnect: true,
     });
-    instance.on("disconnected", () => setStatus(activeCtx, "pinet portal: reconnecting…"));
-    instance.on("reconnecting", (info: { delayMs: number }) => setStatus(activeCtx, `pinet portal: reconnecting in ${Math.round(info.delayMs / 1000)}s`));
     instance.on("reconnected", () => {
-      setStatus(activeCtx, "pinet portal: connected");
       notify(activeCtx, "Pinet portal reconnected; resyncing remote session.", "info");
     });
-    instance.on("resynced", () => setStatus(activeCtx, "pinet portal: connected"));
     instance.on("resync_error", (info: { sessionId: string; error: string }) => notify(activeCtx, `Resync failed for ${info.sessionId}: ${info.error}`, "error"));
     await instance.connect();
     controller = instance;
@@ -185,7 +172,6 @@ export default function portal(pi: Pi): void {
 
       if (sub === "setup") {
         try {
-          setStatus(ctx, "pinet portal: waiting for browser approval…");
           const result = await onboardController({
             httpUrl,
             dir,
@@ -197,10 +183,8 @@ export default function portal(pi: Pi): void {
           });
           await ensureController();
           notify(ctx, `Pinet portal enrolled as ${result.deviceId}`, "info");
-          setStatus(ctx, "pinet portal: ready");
         } catch (error) {
           notify(ctx, `Portal setup failed: ${String((error as Error)?.message ?? error)}`, "error");
-          setStatus(ctx, "pinet portal: setup failed");
         }
         return;
       }
@@ -211,7 +195,6 @@ export default function portal(pi: Pi): void {
         activePortal = undefined;
         activeSession = undefined;
         clearControllerState(dir);
-        setStatus(ctx, "pinet portal: logged out");
         notify(ctx, "Pinet portal identity cleared.", "warning");
         return;
       }
@@ -250,7 +233,9 @@ export default function portal(pi: Pi): void {
             sessionId,
             sink: {
               append,
-              status: ({ phase, model }) => setStatus(ctx, `pinet portal · ${phase}${model ? ` · ${model.provider}/${model.id}` : ""}`),
+              // The extension no longer writes to pi's status line; run
+              // /pinet status (or /portal status) to see it on demand.
+              status: () => {},
               notify: (message, type) => notify(ctx, message, type),
             },
           });
@@ -283,7 +268,6 @@ export default function portal(pi: Pi): void {
         activeSession = undefined;
         controller?.close();
         controller = undefined;
-        setStatus(ctx, "pinet portal: detached");
         notify(ctx, "Portal detached.", "info");
         return;
       }
@@ -329,7 +313,5 @@ export default function portal(pi: Pi): void {
 
   pi.on("session_start", async (_event, ctx) => {
     activeCtx = ctx;
-    const state = loadControllerState(dir);
-    setStatus(ctx, state.deviceId ? "pinet portal: ready" : "pinet portal: run /portal setup");
   });
 }
