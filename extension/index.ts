@@ -187,6 +187,17 @@ export default function pinet(pi: Pi): void {
     }
   }
 
+  /**
+   * Record the active context for every event. pi does not guarantee that
+   * `session_start` is delivered after our handlers are registered (extensions
+   * load asynchronously, and a large session can start first), so any event can
+   * be the one that finally lets us register the session.
+   */
+  function adopt(ctx: ExtensionContext): void {
+    activeCtx = ctx;
+    if (bridge && !sessionId) registerSession(ctx);
+  }
+
   function registerSession(ctx: ExtensionContext): void {
     if (!bridge || !ctx) {
       trace("registerSession skipped", `bridge=${Boolean(bridge)} ctx=${Boolean(ctx)}`);
@@ -440,7 +451,7 @@ export default function pinet(pi: Pi): void {
 
   pi.on("session_start", async (_event, ctx) => {
     trace("session_start", `bridge=${Boolean(bridge)} sessionId=${sessionId ?? "-"}`);
-    activeCtx = ctx;
+    adopt(ctx);
     if (bridge && !sessionId) registerSession(ctx);
   });
 
@@ -457,38 +468,38 @@ export default function pinet(pi: Pi): void {
   // directly (one active session per process); activeCtx is only a hint for
   // bridge callbacks that run outside an event.
   pi.on("message_end", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     syncEntries(ctx);
   });
 
   pi.on("turn_end", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     syncEntries(ctx);
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("tool_execution_start", async (event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     runningTools.set(event.toolCallId, { toolName: event.toolName, args: event.args });
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     runningTools.delete(event.toolCallId);
     syncEntries(ctx);
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("agent_start", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     runCounter += 1;
     currentRun = { id: `run_${Date.now().toString(36)}_${runCounter.toString(36)}`, startedAt: Date.now() };
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     currentRun = undefined;
     runningTools.clear();
     syncEntries(ctx);
@@ -496,41 +507,41 @@ export default function pinet(pi: Pi): void {
   });
 
   pi.on("model_select", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("thinking_level_select", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("session_info_changed", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     safe(() => bridge?.publishMeta(buildMeta(ctx)));
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     compacting = { reason: event.reason ?? "manual" };
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("session_compact", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     compacting = undefined;
     safe(() => bridge?.publishRebase(ctx.sessionManager.getEntries() as unknown as Json[], ctx.sessionManager.getLeafId() ?? null));
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("session_compact_failed", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     compacting = undefined;
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("session_tree", async (_event, ctx) => {
-    activeCtx = ctx;
+    adopt(ctx);
     safe(() => bridge?.publishRebase(ctx.sessionManager.getEntries() as unknown as Json[], ctx.sessionManager.getLeafId() ?? null));
   });
 
