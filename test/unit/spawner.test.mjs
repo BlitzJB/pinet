@@ -101,3 +101,71 @@ describe("SessionSpawner", () => {
     expect(spawner.spawn()).toMatchObject({ ok: false, error: "spawn_failed:ENOENT" });
   });
 });
+
+describe("SessionSpawner with tmux (sessions outlive the spawner)", () => {
+  function makeTmuxSpawner(overrides = {}) {
+    const calls = [];
+    const live = new Set();
+    const spawner = new SessionSpawner({
+      cwd: "/srv/app",
+      prefix: "studio",
+      tmux: "tmux",
+      listSessions: () => [...live].join("\n"),
+      spawnFn: (bin, args, options) => {
+        calls.push({ bin, args, options });
+        if (args[0] === "new-session") live.add(args[3]);
+        if (args[0] === "kill-session") live.delete(args[2]);
+        return { pid: 1, once() {} };
+      },
+      ...overrides,
+    });
+    return { spawner, calls, live };
+  }
+
+  it("starts the session in a detached tmux session", () => {
+    const { spawner, calls, live } = makeTmuxSpawner();
+    const result = spawner.spawn({ name: "fix login" });
+    expect(result).toMatchObject({ ok: true, detached: true });
+    expect(result.tmuxName).toBe(`pinet-${result.sessionId.slice(0, 8)}`);
+    expect(calls[0].bin).toBe("tmux");
+    expect(calls[0].args.slice(0, 5)).toEqual(["new-session", "-d", "-s", result.tmuxName, "-c"]);
+    expect(calls[0].args[5]).toBe("/srv/app");
+    expect(calls[0].args[6]).toBe(`'pi' '--mode' 'rpc' '--session-id' '${result.sessionId}' '--name' 'fix login'`);
+    expect(live.has(result.tmuxName)).toBe(true);
+    expect(spawner.capability()).toMatchObject({ persistent: true, active: 1 });
+  });
+
+  it("does not kill detached sessions on shutdown, so a spawner restart keeps them", () => {
+    const { spawner, calls, live } = makeTmuxSpawner();
+    const result = spawner.spawn();
+    spawner.shutdown();
+    expect(calls.map((c) => c.args[0])).toEqual(["new-session"]);
+    expect(live.has(result.tmuxName)).toBe(true);
+    expect(spawner.list()).toHaveLength(1);
+  });
+
+  it("kills a detached session through tmux when asked", () => {
+    const { spawner, calls, live } = makeTmuxSpawner();
+    const result = spawner.spawn();
+    expect(spawner.kill(result.sessionId)).toBe(true);
+    expect(calls[1].args).toEqual(["kill-session", "-t", result.tmuxName]);
+    expect(live.has(result.tmuxName)).toBe(false);
+    expect(spawner.list()).toHaveLength(0);
+  });
+
+  it("forgets detached sessions whose tmux session is gone", () => {
+    const { spawner, live } = makeTmuxSpawner();
+    const first = spawner.spawn();
+    expect(spawner.list()).toHaveLength(1);
+    live.clear();
+    spawner.spawn();
+    expect(spawner.list().map((r) => r.sessionId)).not.toContain(first.sessionId);
+  });
+
+  it("falls back to a direct child when tmux is missing", () => {
+    const { spawner } = makeSpawner();
+    const result = spawner.spawn();
+    expect(result).toMatchObject({ ok: true, detached: false });
+    expect(spawner.capability().persistent).toBe(false);
+  });
+});

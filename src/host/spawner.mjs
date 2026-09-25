@@ -8,11 +8,17 @@
  *   - `worktree` (planned): each session gets its own git worktree.
  *   - `off`: spawning disabled.
  *
- * A spawned session is a child `pi` process running in RPC mode. It inherits
- * PINET_DIR, so it reuses the host identity and registers with the coordinator
- * like any other host — no extra service, everything lives in the extension.
+ * A spawned session is a `pi --mode rpc` process. RPC mode exits as soon as its
+ * stdin closes, so a plain child would die with (and be killed by) the spawner —
+ * a restart would take the spawned session down with it. When tmux is available
+ * the session is started in a detached tmux session instead, which gives it a
+ * TTY and makes it independent of the spawner process. Without tmux we fall back
+ * to a direct child, which does not outlive the spawner.
+ *
+ * Either way it inherits PINET_DIR, so it reuses the host identity and registers
+ * with the coordinator like any other host — no extra service.
  */
-import { execFile, spawn as nodeSpawn } from "node:child_process";
+import { execFile, execFileSync, spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { promisify } from "node:util";
@@ -32,6 +38,7 @@ const NOUNS = [
 
 const pick = (list) => list[Math.floor(Math.random() * list.length)];
 const sanitize = (value) => String(value ?? "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+const shQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
 /** True when `dir` is inside a git working tree (needed for worktree mode). */
 export async function detectGit(dir, run = execFileAsync) {
@@ -42,6 +49,19 @@ export async function detectGit(dir, run = execFileAsync) {
     return false;
   }
 }
+
+/** Returns the tmux binary to use, or null when tmux isn't installed. */
+export async function detectTmux(run = execFileAsync) {
+  try {
+    await run("tmux", ["-V"]);
+    return "tmux";
+  } catch {
+    return null;
+  }
+}
+
+const defaultListSessions = () =>
+  execFileSync("tmux", ["list-sessions", "-F", "#{session_name}"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 
 export class SessionSpawner {
   #children = new Map();
@@ -56,6 +76,8 @@ export class SessionSpawner {
     spawnFn = nodeSpawn,
     git = false,
     clock = Date.now,
+    tmux = null,
+    listSessions = defaultListSessions,
   } = {}) {
     this.cwd = cwd;
     this.mode = SPAWN_MODES.includes(mode) ? mode : "session";
@@ -66,6 +88,8 @@ export class SessionSpawner {
     this.spawnFn = spawnFn;
     this.git = git;
     this.clock = clock;
+    this.tmux = tmux;
+    this.listSessions = listSessions;
   }
 
   get enabled() {
@@ -74,7 +98,14 @@ export class SessionSpawner {
 
   /** Host capability advertised in session meta so controllers can offer "new session". */
   capability() {
-    return { mode: this.mode, cwd: this.cwd, git: Boolean(this.git), max: this.max, active: this.#children.size };
+    return {
+      mode: this.mode,
+      cwd: this.cwd,
+      git: Boolean(this.git),
+      max: this.max,
+      active: this.#children.size,
+      persistent: Boolean(this.tmux),
+    };
   }
 
   list() {
@@ -91,13 +122,48 @@ export class SessionSpawner {
     return args;
   }
 
+  #tmuxCommand({ sessionId, name }) {
+    return [this.piBin, ...this.buildArgs({ sessionId, name })].map(shQuote).join(" ");
+  }
+
+  /** Drop detached sessions whose tmux session has gone away. */
+  #reconcile() {
+    if (!this.tmux || this.#children.size === 0) return;
+    let live;
+    try {
+      live = new Set(String(this.listSessions()).split("\n").map((name) => name.trim()).filter(Boolean));
+    } catch {
+      return; // no tmux server yet: nothing is live, but don't guess
+    }
+    for (const [id, record] of [...this.#children]) {
+      if (record.detached && !live.has(record.tmuxName)) this.#children.delete(id);
+    }
+  }
+
   spawn({ name } = {}) {
     if (!this.enabled) return { ok: false, error: "spawn_disabled" };
     if (this.mode !== "session") return { ok: false, error: `spawn_mode_unavailable:${this.mode}` };
+    this.#reconcile();
     if (this.#children.size >= this.max) return { ok: false, error: "spawn_capacity" };
 
     const sessionId = randomUUID();
     const sessionName = String(name ?? "").trim() || this.autoName();
+
+    if (this.tmux) {
+      const tmuxName = `pinet-${sessionId.slice(0, 8)}`;
+      try {
+        this.spawnFn(
+          this.tmux,
+          ["new-session", "-d", "-s", tmuxName, "-c", this.cwd, this.#tmuxCommand({ sessionId, name: sessionName })],
+          { stdio: "ignore" },
+        );
+      } catch (error) {
+        return { ok: false, error: `spawn_failed:${String(error?.message ?? error)}` };
+      }
+      this.#children.set(sessionId, { sessionId, name: sessionName, tmuxName, detached: true, pid: null, startedAt: this.clock() });
+      return { ok: true, sessionId, name: sessionName, pid: null, detached: true, tmuxName };
+    }
+
     let child;
     try {
       child = this.spawnFn(this.piBin, this.buildArgs({ sessionId, name: sessionName }), {
@@ -112,18 +178,26 @@ export class SessionSpawner {
     child.stdout?.resume?.();
     child.stderr?.resume?.();
 
-    this.#children.set(sessionId, { sessionId, name: sessionName, pid: child.pid, startedAt: this.clock(), child });
+    this.#children.set(sessionId, { sessionId, name: sessionName, pid: child.pid, detached: false, startedAt: this.clock(), child });
     const forget = () => this.#children.delete(sessionId);
     child.once?.("exit", forget);
     child.once?.("error", forget);
 
-    return { ok: true, sessionId, name: sessionName, pid: child.pid };
+    return { ok: true, sessionId, name: sessionName, pid: child.pid, detached: false };
   }
 
   kill(sessionId) {
     const record = this.#children.get(sessionId);
     if (!record) return false;
     this.#children.delete(sessionId);
+    if (record.detached) {
+      try {
+        this.spawnFn(this.tmux, ["kill-session", "-t", record.tmuxName], { stdio: "ignore" });
+      } catch {
+        /* already gone */
+      }
+      return true;
+    }
     try {
       record.child.stdin?.end?.();
       record.child.kill?.("SIGTERM");
@@ -133,7 +207,14 @@ export class SessionSpawner {
     return true;
   }
 
+  /**
+   * Detached (tmux) sessions deliberately outlive this process — that is the
+   * whole point, so a spawner restart doesn't kill them. Only the direct-child
+   * fallback is torn down.
+   */
   shutdown() {
-    for (const id of [...this.#children.keys()]) this.kill(id);
+    for (const id of [...this.#children.keys()]) {
+      if (!this.#children.get(id)?.detached) this.kill(id);
+    }
   }
 }

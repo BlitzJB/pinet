@@ -18,7 +18,7 @@ import { HostBridge } from "../src/host/bridge.mjs";
 import { createSerialQueue } from "../src/host/command-queue.mjs";
 import { resolveDelivery } from "../src/host/delivery.mjs";
 import { clearHostState, ensureHostKeys, enrollHostWithCode, loadHostState, onboardHost, saveHostState } from "../src/host/onboarding.mjs";
-import { SessionSpawner, detectGit } from "../src/host/spawner.mjs";
+import { SessionSpawner, detectGit, detectTmux } from "../src/host/spawner.mjs";
 
 type Json = Record<string, unknown>;
 type Pi = ExtensionAPI;
@@ -66,6 +66,11 @@ export default function pinet(pi: Pi): void {
     piBin: process.env.PINET_PI_BIN ?? "pi",
   });
   trackSpawner(spawner);
+  // With tmux the spawned session gets a TTY and outlives this process, so a
+  // spawner restart no longer takes spawned sessions down with it.
+  void detectTmux().then((tmux) => {
+    spawner.tmux = tmux;
+  });
 
   function setStatus(ctx: ExtensionContext | undefined, text: string | undefined): void {
     try {

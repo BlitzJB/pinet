@@ -100,12 +100,9 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
 
   const running = state.status?.phase === "running" || state.status?.isIdle === false;
   const model = state.status?.model;
-  const runningTools = Array.isArray(state.status?.runningTools) ? state.status.runningTools.length : 0;
   const feedback = deriveRunFeedback({
     outbox: state.outbox,
     running,
-    runningTools,
-    entryCount: state.entries.length,
     compacting: Boolean(state.status?.compacting),
   });
   const cwd = state.meta?.cwd;

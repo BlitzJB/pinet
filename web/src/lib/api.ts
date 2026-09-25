@@ -59,6 +59,8 @@ export interface SpawnCapability {
   git: boolean;
   max: number;
   active: number;
+  /** True when spawned sessions survive a spawner restart (tmux available). */
+  persistent?: boolean;
 }
 
 export interface ServerSession {

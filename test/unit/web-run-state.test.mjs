@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { deriveRunFeedback } from "../../web/src/lib/run-state.ts";
 
-const base = { running: false, runningTools: 0, entryCount: 1 };
+const base = { running: false };
 
 describe("deriveRunFeedback", () => {
   it("shows sending before the host ack", () => {
@@ -18,25 +18,25 @@ describe("deriveRunFeedback", () => {
     expect(feedback?.active).toBe(false);
   });
 
-  it("shows working until the first block, then clears", () => {
+  it("keeps a generic working label for the whole run, even after content arrives", () => {
     const outbox = { status: "working", at: 0, entriesAt: 1, sawRun: true };
-    expect(deriveRunFeedback({ ...base, outbox, running: true })).toEqual({ label: "Working…", active: true });
-    // first block arrived (entryCount grew past entriesAt)
-    expect(deriveRunFeedback({ ...base, outbox, running: true, entryCount: 2 })).toBeNull();
+    expect(deriveRunFeedback({ ...base, outbox, running: true })).toEqual({ label: "Working…", active: true, generic: true });
+    // The reply has started landing — the indicator must stay up and rotate.
+    expect(deriveRunFeedback({ ...base, outbox, running: true })).toMatchObject({ active: true, generic: true });
   });
 
-  it("stays quiet while a tool is visibly running", () => {
-    const outbox = { status: "working", at: 0, entriesAt: 1, sawRun: true };
-    expect(deriveRunFeedback({ ...base, outbox, running: true, runningTools: 1 })).toBeNull();
+  it("stays visible for a run started by another controller", () => {
+    expect(deriveRunFeedback({ ...base, outbox: null, running: true })).toEqual({ label: "Working…", active: true, generic: true });
+  });
+
+  it("clears once the run is over", () => {
+    expect(deriveRunFeedback({ ...base, outbox: null, running: false })).toBeNull();
+    expect(deriveRunFeedback({ ...base, outbox: { status: "working", at: 0, sawRun: true }, running: false })).toBeNull();
   });
 
   it("surfaces a delivery failure", () => {
     const feedback = deriveRunFeedback({ ...base, outbox: { status: "error", at: 0, error: "host_unavailable" } });
     expect(feedback).toMatchObject({ active: false, error: "host_unavailable" });
-  });
-
-  it("shows working for a run started by another controller", () => {
-    expect(deriveRunFeedback({ ...base, outbox: null, running: true })).toEqual({ label: "Working…", active: true });
   });
 
   it("shows compaction while the context is being compacted", () => {

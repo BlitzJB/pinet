@@ -60,6 +60,12 @@ export function Composer({
     void onSend(value);
   }
 
+  const hasText = text.trim().length > 0;
+  // While a run is in flight the button only becomes "stop" when there is
+  // nothing to send; with text it stays a send button so a steering message can
+  // still go out mid-run.
+  const stopping = busy && !hasText;
+
   return (
     <div className={cn(paper, "flex w-full flex-col gap-1 rounded-[24px] p-2.5 shadow-lg shadow-black/5 transition-colors")}>
       <textarea
@@ -68,7 +74,9 @@ export function Composer({
         disabled={disabled}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+          // Enter inserts a newline (mobile keyboards send a bare Enter); send
+          // explicitly with the button or Cmd/Ctrl+Enter.
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
             event.preventDefault();
             submit();
           }
@@ -142,21 +150,25 @@ export function Composer({
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
           <ContextMeter usage={contextUsage} compacting={compacting} />
+          <span aria-hidden className="hidden text-[10px] text-muted-foreground/35 sm:inline">
+            ⌘↵
+          </span>
           <button
             type="button"
-            aria-label={busy ? "Stop" : "Send"}
-            onClick={busy ? onStop : submit}
-            disabled={disabled || (!busy && !text.trim())}
+            aria-label={stopping ? "Stop" : "Send"}
+            title={stopping ? "Stop" : "Send (⌘↵)"}
+            onClick={stopping ? onStop : submit}
+            disabled={disabled || (!stopping && !hasText)}
             className={cn(
               "relative grid size-9 shrink-0 place-items-center rounded-full",
               "bg-foreground text-background transition-[opacity,scale,background-color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]",
               "hover:opacity-90 active:scale-[0.94] disabled:opacity-30 motion-reduce:transition-none",
             )}
           >
-            <span className={cn(iconSwap, busy ? iconSwapOut : iconSwapIn)}>
+            <span className={cn(iconSwap, stopping ? iconSwapOut : iconSwapIn)}>
               <ArrowUpIcon className="size-4" />
             </span>
-            <span className={cn(iconSwap, busy ? iconSwapIn : iconSwapOut)}>
+            <span className={cn(iconSwap, stopping ? iconSwapIn : iconSwapOut)}>
               <SquareIcon className="size-3.5 fill-current" />
             </span>
           </button>

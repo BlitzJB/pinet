@@ -16,25 +16,26 @@ export interface Outbox {
 export interface RunFeedback {
   label: string;
   active: boolean;
+  /** True when `label` is a generic placeholder and the UI should rotate phrases. */
+  generic?: boolean;
   error?: string;
 }
 
 /**
- * Derive the waiting/status indicator shown until the first block arrives.
- * `sending`/`delivered`/`queued` come from the local send + host ack;
- * `working` comes from the host's run lifecycle.
+ * Derive the status line shown at the bottom of the transcript.
+ *
+ * `sending`/`delivered`/`queued` come from the local send + host ack; `working`
+ * from the host's run lifecycle. While a run is in flight the indicator stays up
+ * for the whole turn (with a generic label the UI rotates through) so it doesn't
+ * vanish the instant the first block of the reply arrives.
  */
 export function deriveRunFeedback({
   outbox,
   running,
-  runningTools = 0,
-  entryCount = 0,
   compacting = false,
 }: {
   outbox?: Outbox | null;
   running: boolean;
-  runningTools?: number;
-  entryCount?: number;
   compacting?: boolean;
 }): RunFeedback | null {
   if (compacting) return { label: "Compacting context…", active: true };
@@ -49,9 +50,8 @@ export function deriveRunFeedback({
     return { label, active: false };
   }
 
-  const hasContent = outbox ? entryCount > (outbox.entriesAt ?? 0) : false;
-  if ((outbox?.status === "working" || running) && runningTools === 0 && !hasContent) {
-    return { label: "Working…", active: true };
-  }
+  // `running` is the host's own run lifecycle, so it is authoritative: the
+  // indicator stays up for the whole turn and clears when the host goes idle.
+  if (running) return { label: "Working…", active: true, generic: true };
   return null;
 }
