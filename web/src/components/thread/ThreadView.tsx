@@ -57,6 +57,16 @@ function Welcome({ name, onPrompt }: { name?: string | null; onPrompt: (text: st
   );
 }
 
+function StartingSession({ name }: { name?: string | null }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
+      <Loader2Icon className="size-5 animate-spin text-muted-foreground motion-reduce:animate-none" />
+      <h1 className="text-lg font-medium">{name ?? "Starting session"}</h1>
+      <p className="text-sm text-muted-foreground">Waiting for the host to register…</p>
+    </div>
+  );
+}
+
 export function ThreadView({ sessionId }: { sessionId: string }) {
   const connection = usePinet();
   const conn = useConnectionState();
@@ -68,13 +78,22 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     if (conn.status !== "connected" || state.attached) return;
     let cancelled = false;
-    connection.attach(sessionId, "control").catch(() => {
-      if (!cancelled) {
-        /* surfaced through connection state */
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    const attempt = async () => {
+      try {
+        await connection.attach(sessionId, "control");
+      } catch {
+        if (cancelled) return;
+        attempts += 1;
+        // A freshly spawned session may not have registered yet; keep trying.
+        if (attempts < 20) timer = setTimeout(() => void attempt(), 1000);
       }
-    });
+    };
+    void attempt();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [conn.status, state.attached, sessionId, connection]);
 
@@ -121,7 +140,11 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
       >
         <div className="mx-auto flex w-full max-w-[44rem] flex-1 flex-col px-4 pt-6 pb-4">
           {state.entries.length === 0 ? (
-            <Welcome name={state.meta?.name} onPrompt={(text) => void connection.prompt(sessionId, text)} />
+            !state.attached && conn.status === "connected" ? (
+              <StartingSession name={state.meta?.name} />
+            ) : (
+              <Welcome name={state.meta?.name} onPrompt={(text) => void connection.prompt(sessionId, text)} />
+            )
           ) : (
             <ThreadMessages entries={state.entries} running={running} />
           )}

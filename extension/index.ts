@@ -18,9 +18,23 @@ import { HostBridge } from "../src/host/bridge.mjs";
 import { createSerialQueue } from "../src/host/command-queue.mjs";
 import { resolveDelivery } from "../src/host/delivery.mjs";
 import { clearHostState, ensureHostKeys, enrollHostWithCode, loadHostState, onboardHost, saveHostState } from "../src/host/onboarding.mjs";
+import { SessionSpawner, detectGit } from "../src/host/spawner.mjs";
 
 type Json = Record<string, unknown>;
 type Pi = ExtensionAPI;
+
+// Spawned children are killed when the pi process exits. Installed once so
+// repeated extension loads (e.g. in tests) don't stack exit listeners.
+const liveSpawners = new Set<SessionSpawner>();
+let exitHookInstalled = false;
+function trackSpawner(spawner: SessionSpawner): void {
+  liveSpawners.add(spawner);
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once("exit", () => {
+    for (const live of liveSpawners) live.shutdown();
+  });
+}
 
 function deriveHttp(wsUrl: string): string {
   const url = new URL(wsUrl);
@@ -43,6 +57,15 @@ export default function pinet(pi: Pi): void {
   let currentRun: { id: string; startedAt: number } | undefined;
   let compacting: { reason: string } | undefined;
   let runCounter = 0;
+
+  // Session spawner (see src/host/spawner.mjs). `PINET_SPAWN_MODE=off` disables it.
+  const spawner = new SessionSpawner({
+    cwd: process.cwd(),
+    mode: process.env.PINET_SPAWN_MODE ?? "session",
+    max: Number(process.env.PINET_SPAWN_MAX ?? 8),
+    piBin: process.env.PINET_PI_BIN ?? "pi",
+  });
+  trackSpawner(spawner);
 
   function setStatus(ctx: ExtensionContext | undefined, text: string | undefined): void {
     try {
@@ -87,7 +110,12 @@ export default function pinet(pi: Pi): void {
   }
 
   function buildMeta(ctx: ExtensionContext): Json {
-    return { name: pi.getSessionName() ?? null, cwd: ctx.cwd, host: hostname() };
+    return {
+      name: pi.getSessionName() ?? null,
+      cwd: ctx.cwd,
+      host: hostname(),
+      spawn: spawner.enabled ? { ...spawner.capability(), cwd: ctx.cwd } : null,
+    };
   }
 
   function snapshot(ctx: ExtensionContext): Json {
@@ -130,6 +158,10 @@ export default function pinet(pi: Pi): void {
 
   function registerSession(ctx: ExtensionContext): void {
     if (!bridge || !ctx) return;
+    spawner.cwd = ctx.cwd;
+    void detectGit(ctx.cwd).then((isGit) => {
+      spawner.git = isGit;
+    });
     sessionId = ctx.sessionManager.getSessionId();
     bridge.setSnapshotProvider(() => snapshot(ctx));
     bridge.openSession({ sessionId, meta: buildMeta(ctx) });
@@ -139,7 +171,7 @@ export default function pinet(pi: Pi): void {
 
   // -- commands from controllers --------------------------------------------
 
-  async function handleCommand({ op, args }: { op: string; args: Json }): Promise<{ accepted: boolean; mode: string | null; error?: string | null }> {
+  async function handleCommand({ op, args }: { op: string; args: Json }): Promise<{ accepted: boolean; mode: string | null; error?: string | null; data?: Json | null }> {
     const ctx = activeCtx;
     if (!ctx) return { accepted: false, mode: null, error: "no_active_session" };
     switch (op) {
@@ -171,6 +203,16 @@ export default function pinet(pi: Pi): void {
       case "rename":
         pi.setSessionName(String(args.name ?? ""));
         return { accepted: true, mode: "immediate" };
+      case "spawn": {
+        const result = spawner.spawn({ name: typeof args.name === "string" ? args.name : undefined });
+        if (!result.ok) return { accepted: false, mode: null, error: result.error };
+        safe(() => bridge?.publishMeta(buildMeta(ctx)));
+        return {
+          accepted: true,
+          mode: "immediate",
+          data: { sessionId: result.sessionId, name: result.name, pid: result.pid ?? null },
+        };
+      }
       default:
         return { accepted: false, mode: null, error: `unknown_op:${op}` };
     }
@@ -331,6 +373,7 @@ export default function pinet(pi: Pi): void {
 
   pi.on("session_shutdown", async () => {
     safe(() => bridge?.closeSession("shutdown"));
+    spawner.shutdown();
     activeCtx = undefined;
     sessionId = undefined;
     sentIds = [];

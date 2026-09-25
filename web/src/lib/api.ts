@@ -52,12 +52,20 @@ export async function listDevices(): Promise<DeviceInfo[]> {
   return ((await response.json()) as { devices: DeviceInfo[] }).devices;
 }
 
+export interface SpawnCapability {
+  mode: string;
+  cwd: string;
+  git: boolean;
+  max: number;
+  active: number;
+}
+
 export interface ServerSession {
   sessionId: string;
   hostId: string;
   hostName: string | null;
   hostConnected: boolean;
-  meta: { name?: string | null; cwd?: string | null } | null;
+  meta: { name?: string | null; cwd?: string | null; spawn?: SpawnCapability | null } | null;
   epoch: number;
 }
 

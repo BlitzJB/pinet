@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { ArrowUpIcon, BrainIcon, ChevronDownIcon, Minimize2Icon, SquareIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { ComposerMenu } from "../ui/ComposerMenu";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ghostButton, iconSwap, iconSwapIn, iconSwapOut, mono, paper } from "../ui/surfaces";
 import { ContextMeter } from "./ContextMeter";
 
@@ -36,6 +37,7 @@ export function Composer({
 }) {
   const [text, setText] = useState("");
   const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [confirmCompact, setConfirmCompact] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useLayoutEffect(() => {
@@ -128,7 +130,7 @@ export function Composer({
           <button
             type="button"
             disabled={disabled}
-            onClick={onCompact}
+            onClick={() => setConfirmCompact(true)}
             className={cn(ghostButton, "h-auto gap-1.5 rounded-full px-2.5 py-1 text-xs disabled:opacity-40")}
             title="Compact context"
           >
@@ -159,6 +161,29 @@ export function Composer({
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmCompact}
+        title="Compact this context?"
+        confirmLabel="Compact"
+        onConfirm={() => {
+          setConfirmCompact(false);
+          onCompact();
+        }}
+        onCancel={() => setConfirmCompact(false)}
+        description={
+          <>
+            The agent summarizes the conversation so far and continues from that summary. The transcript stays in Pinet, but older
+detail may be dropped from the model's view.
+            {typeof contextUsage?.percent === "number" && (
+              <>
+                {" "}
+                Currently using <b>{Math.round(contextUsage.percent)}%</b> of the context window.
+              </>
+            )}
+          </>
+        }
+      />
     </div>
   );
 }

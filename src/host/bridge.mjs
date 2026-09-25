@@ -191,8 +191,8 @@ export class HostBridge extends EventEmitter {
 
   async #onCommand(data) {
     const session = this.session;
-    const reply = (accepted, mode = null, error = null) =>
-      this.socket.send("cmd.ack", { commandId: data.commandId, accepted, mode, error });
+    const reply = (accepted, mode = null, error = null, extra = null) =>
+      this.socket.send("cmd.ack", { commandId: data.commandId, accepted, mode, error, ...(extra ? { data: extra } : {}) });
     if (!session || data.sessionId !== session.sessionId) return reply(false, null, "no_active_session");
     const attachment = session.controllers.get(data.attachmentId);
     if (!attachment) return reply(false, null, "unknown_attachment");
@@ -225,7 +225,7 @@ export class HostBridge extends EventEmitter {
     } catch (error) {
       result = { accepted: false, mode: null, error: String(error?.message ?? error) };
     }
-    const outcome = [result.accepted === true, result.mode ?? null, result.error ?? null];
+    const outcome = [result.accepted === true, result.mode ?? null, result.error ?? null, result.data ?? null];
     this.seenCommands.set(data.commandId, outcome);
     this.seenCommandOrder.push(data.commandId);
     while (this.seenCommandOrder.length > MAX_SEEN_COMMANDS) {

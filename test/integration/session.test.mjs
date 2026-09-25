@@ -228,6 +228,22 @@ describe("authenticated session + end-to-end commands", () => {
     host.bridge.close();
   });
 
+  it("round-trips extra ack data from a host command (spawn)", async () => {
+    const host = makeHost();
+    await host.bridge.connect();
+    host.bridge.openSession({ sessionId: SESSION });
+    host.bridge.onCommand(async (command) => {
+      if (command.op !== "spawn") return { accepted: false, mode: null, error: "unknown_op" };
+      return { accepted: true, mode: "immediate", data: { sessionId: "spawned-1", name: "child" } };
+    });
+    const controller = await makeController("spawner");
+    await controller.attach(SESSION, "control");
+    const ack = await controller.command(SESSION, "spawn", { name: "child" });
+    expect(ack).toMatchObject({ accepted: true, data: { sessionId: "spawned-1", name: "child" } });
+    controller.close();
+    host.bridge.close();
+  });
+
   it("rejects a command from an unattached controller", async () => {
     const host = makeHost();
     await host.bridge.connect();

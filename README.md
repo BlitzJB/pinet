@@ -138,6 +138,9 @@ write a prompt, it is delivered immediately (steers while pi is running)
 | `PINET_HTTP` | host, controller | coordinator HTTP origin |
 | `PINET_ENROLL_CODE` | host | one-time host enrollment code |
 | `PINET_DIR` | host, controller | key/config directory (default `~/.pinet`) |
+| `PINET_SPAWN_MODE` | host | session spawner mode: `session` (same dir, default), `worktree` (planned), `off` |
+| `PINET_SPAWN_MAX` | host | max concurrent spawned sessions (default 8) |
+| `PINET_PI_BIN` | host | pi binary used to spawn sessions (default `pi`) |
 
 ## Security in one paragraph
 

@@ -1,7 +1,7 @@
 import { PinetController } from "../../../src/controller/client.mjs";
 import { describeEntry } from "../../../src/controller/portal.mjs";
 import { webCryptoProvider } from "../../../src/crypto/webcrypto.mjs";
-import type { ServerSession } from "./api";
+import type { ServerSession, SpawnCapability } from "./api";
 import { ensureDevice, loadDevice, clearDevice, type StoredDevice } from "./device";
 import type { Outbox } from "./run-state";
 import { Store } from "./store";
@@ -37,6 +37,7 @@ export interface SessionMeta {
   name?: string | null;
   cwd?: string | null;
   host?: string;
+  spawn?: SpawnCapability | null;
 }
 
 export type AttachmentMode = "read" | "control";
@@ -251,6 +252,16 @@ export class PinetConnection {
   setThinking(sessionId: string, level: string): Promise<unknown> {
     return this.controller!.command(sessionId, "set_thinking", { level });
   }
+  /** Ask a host to spawn a new session (session/worktree spawn mode). */
+  async spawn(sessionId: string, options: { name?: string; mode?: string } = {}): Promise<{ sessionId?: string; name?: string }> {
+    if (!this.controller) throw new Error("not connected");
+    const ack = (await this.controller.command(sessionId, "spawn", options)) as
+      | { accepted?: boolean; error?: string; data?: { sessionId?: string; name?: string } }
+      | undefined;
+    if (ack?.accepted === false) throw new Error(ack.error ?? "spawn failed");
+    return ack?.data ?? {};
+  }
+
   async rename(sessionId: string, name: string): Promise<void> {
     const store = this.store(sessionId);
     const previous = store.get().meta?.name ?? null;
