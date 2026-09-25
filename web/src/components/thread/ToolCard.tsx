@@ -48,7 +48,7 @@ export function ToolCard({ name, args, output, error, running, durationMs, flat 
       {hasBody && (
         <CollapsibleContent open={open}>
           <div className="px-3 pb-3">
-            <pre className="max-h-96 overflow-auto rounded-lg border border-border/60 bg-background/60 p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-foreground/70">
+            <pre className="max-h-96 overflow-auto rounded-lg border border-border/60 bg-background/60 p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-foreground/70">
               {output}
             </pre>
           </div>

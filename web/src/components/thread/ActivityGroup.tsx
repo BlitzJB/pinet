@@ -58,7 +58,7 @@ export function ActivityGroup({ items, running }: { items: ActivityItem[]; runni
             item.type === "reasoning" ? (
               <div
                 key={index}
-                className="max-h-72 overflow-y-auto border-l-2 border-border pl-3 text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground italic"
+                className="max-h-72 overflow-y-auto border-l-2 border-border pl-3 text-[13px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground italic"
               >
                 {item.text}
               </div>

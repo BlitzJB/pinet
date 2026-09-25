@@ -59,7 +59,7 @@ export function groupEntries(entries: DisplayEntry[]): Group[] {
 function UserMessage({ entry }: { entry: DisplayEntry }) {
   return (
     <div className="group flex flex-col items-end gap-1">
-      <div className="max-w-[85%] rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-foreground">
+      <div className="max-w-[85%] min-w-0 rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-foreground">
         {entry.text ?? entry.body}
       </div>
       <div className="flex h-7 items-center">
@@ -84,7 +84,7 @@ function CompactionNotice({ entry }: { entry: DisplayEntry }) {
         <ChevronDownIcon className={cn("size-3 shrink-0 transition-transform duration-200", open && "rotate-180")} />
       </button>
       <CollapsibleContent open={open} className="w-full">
-        <div className="mx-auto mt-1 max-w-[36rem] rounded-xl border border-border/60 bg-foreground/[0.02] px-3 py-2 text-left text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+        <div className="mx-auto mt-1 max-w-[36rem] rounded-xl border border-border/60 bg-foreground/[0.02] px-3 py-2 text-left text-[13px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground">
           {entry.summary || "No summary recorded."}
         </div>
       </CollapsibleContent>
@@ -127,9 +127,9 @@ export function ThreadMessages({ entries, running }: { entries: DisplayEntry[]; 
         if (group.kind === "compaction") return <CompactionNotice key={group.key} entry={group.entries[0]} />;
         if (group.kind === "system") {
           return (
-            <div key={group.key} className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div key={group.key} className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
               <span className="h-px flex-1 bg-border/60" />
-              <span>
+              <span className="min-w-0 text-center [overflow-wrap:anywhere]">
                 [{group.entries[0].title ?? "system"}] {group.entries[0].body}
               </span>
               <span className="h-px flex-1 bg-border/60" />

@@ -21,7 +21,7 @@ export function Reasoning({ text, active }: { text: string; active?: boolean }) 
         <ChevronDownIcon className={cn("ml-auto size-3.5 transition-transform duration-200", open && "rotate-180")} />
       </button>
       <CollapsibleContent open={open}>
-        <div className="mt-2 max-h-80 overflow-y-auto border-l-2 border-border pl-3 text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground italic">
+        <div className="mt-2 max-h-80 overflow-y-auto border-l-2 border-border pl-3 text-[13px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground italic">
           {text}
         </div>
       </CollapsibleContent>
