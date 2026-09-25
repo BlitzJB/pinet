@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { CheckIcon, CloudOffIcon, Loader2Icon } from "lucide-react";
+import { CloudOffIcon, Loader2Icon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { mono, paper } from "../ui/surfaces";
 import type { ConnStatus } from "../../lib/pinet";
@@ -10,7 +10,7 @@ export function ConnectionState({
   className,
   ...props
 }: Omit<ComponentProps<"div">, "children"> & { status: ConnStatus; error?: string }) {
-  if (status === "online" || status === "connected" || status === "idle") return null;
+  if (status === "connected" || status === "idle") return null;
   const reconnecting = status === "connecting" || status === "reconnecting";
 
   return (
@@ -41,7 +41,6 @@ export function ConnectionState({
         </>
       )}
       {error && !reconnecting && <span className={cn(mono, "shrink-0 truncate text-foreground/30")}>{error}</span>}
-      {status === "connected" && <CheckIcon className="size-3.5 text-emerald-500" />}
     </div>
   );
 }

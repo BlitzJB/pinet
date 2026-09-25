@@ -5,6 +5,7 @@ import { MenuIcon } from "lucide-react";
 import { getMe, loginUrl } from "../lib/api";
 import { PinetProvider } from "../lib/context";
 import { SessionSidebar } from "../components/SessionSidebar";
+import { InstallButton } from "../components/InstallButton";
 import { ghostButton } from "../components/ui/surfaces";
 
 function Splash() {
@@ -61,7 +62,8 @@ function AppShell({ email }: { email: string }) {
             <MenuIcon className="size-4" />
           </button>
           <span className="text-sm font-semibold">Pinet</span>
-          <span className="ml-auto truncate text-[11px] text-muted-foreground">{email}</span>
+          <InstallButton className="ms-auto" />
+          <span className="truncate text-[11px] text-muted-foreground">{email}</span>
         </div>
         <main className="min-h-0 flex-1">
           <Outlet />

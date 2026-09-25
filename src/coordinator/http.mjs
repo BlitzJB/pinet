@@ -29,6 +29,7 @@ const CONTENT_TYPES = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".map": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
 };
 
@@ -47,7 +48,7 @@ function securityHeaders(req, publicUrl) {
     "permissions-policy": "camera=(), microphone=(), geolocation=()",
     "cross-origin-opener-policy": "same-origin",
     "content-security-policy":
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; font-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; font-src 'self' data:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   };
   if (https) headers["strict-transport-security"] = "max-age=31536000; includeSubDomains";
   return headers;

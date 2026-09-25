@@ -8,8 +8,12 @@ import { canonicalJson } from "../common/canonical.mjs";
 import { Emitter } from "../common/emitter.mjs";
 import { PinetSocket } from "../common/ws-client.mjs";
 import { commandAad, frameAad, openJson, sealJson, unwrapGroupKey } from "../crypto/session-crypto.mjs";
+import { createSeqTracker } from "./seq-tracker.mjs";
 
 export class PinetController extends Emitter {
+  /**
+   * @param {{ url: string, deviceId: string, identity: any, encryption: any, deviceName?: string, crypto?: any, reconnect?: boolean }} [options]
+   */
   constructor({ url, deviceId, identity, encryption, deviceName, crypto, reconnect = false } = {}) {
     super();
     this.url = url;
@@ -26,6 +30,8 @@ export class PinetController extends Emitter {
     this.commandWaiters = new Map();
     this.snapshots = new Map();
     this.hostKeys = new Map();
+    this.seqTracker = createSeqTracker();
+    this.resyncing = new Set();
     this.queue = Promise.resolve();
   }
 
@@ -179,6 +185,19 @@ export class PinetController extends Emitter {
 
   // Verify the host-signed key wrap (when present) and pin the host identity
   // on first use, so a hostile coordinator cannot substitute the group key.
+  #scheduleResync(sessionId) {
+    if (this.resyncing.has(sessionId) || !this.attached.has(sessionId)) return;
+    this.resyncing.add(sessionId);
+    setTimeout(() => {
+      const mode = this.attached.get(sessionId) ?? "control";
+      this.keys.delete(sessionId);
+      this.seqTracker.reset(sessionId);
+      this.attach(sessionId, mode)
+        .catch((error) => this.emit("resync_error", { sessionId, error: String(error?.message ?? error) }))
+        .finally(() => this.resyncing.delete(sessionId));
+    }, 0);
+  }
+
   async #onKey(data) {
     const { sessionId, epoch } = data;
     const pinned = this.hostKeys.get(sessionId);
@@ -228,6 +247,11 @@ export class PinetController extends Emitter {
     const route = msg?.route ?? {};
     const sessionId = route.sessionId ?? data.sessionId;
     const epoch = route.epoch ?? data.epoch;
+    const { gap } = this.seqTracker.observe(sessionId, epoch, data.seq);
+    if (gap) {
+      this.emit("gap", { sessionId, epoch, seq: data.seq });
+      this.#scheduleResync(sessionId);
+    }
     const entry = this.keys.get(sessionId);
     if (!entry) return;
     let payload;

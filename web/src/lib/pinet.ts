@@ -191,7 +191,7 @@ export class PinetConnection {
   }
 
   /** Optimistically echo the user's message, then send it and track delivery. */
-  async prompt(sessionId: string, text: string): Promise<unknown> {
+  async prompt(sessionId: string, text: string): Promise<void> {
     if (!this.controller) throw new Error("not connected");
     const store = this.store(sessionId);
     store.set((state) => ({
@@ -206,7 +206,7 @@ export class PinetConnection {
           pendingEchoes: Math.max(0, state.pendingEchoes - 1),
           outbox: { status: "error", at: Date.now(), error: ack.error ?? "rejected" },
         }));
-        return ack;
+        return;
       }
       store.set((state) => {
         const outbox = state.outbox;
@@ -216,7 +216,6 @@ export class PinetConnection {
         }
         return {};
       });
-      return ack;
     } catch (error) {
       store.set((state) => ({
         pendingEchoes: Math.max(0, state.pendingEchoes - 1),

@@ -8,6 +8,8 @@ import { PinetSocket } from "../common/ws-client.mjs";
 import { verify, sign } from "../crypto/keys.mjs";
 import { commandAad, frameAad, generateGroupKey, openJson, sealJson, wrapGroupKey } from "../crypto/e2e.mjs";
 
+const MAX_SEEN_COMMANDS = 1000;
+
 export class HostBridge extends EventEmitter {
   constructor({ url, deviceId, identity, encryption, hostName, agent }) {
     super();
@@ -23,6 +25,7 @@ export class HostBridge extends EventEmitter {
     this.commandHandler = async () => ({ accepted: false, mode: null, error: "no_handler" });
     this.pinnedControllers = new Map();
     this.seenCommands = new Map();
+    this.seenCommandOrder = [];
   }
 
   setSnapshotProvider(fn) {
@@ -221,6 +224,11 @@ export class HostBridge extends EventEmitter {
     }
     const outcome = [result.accepted === true, result.mode ?? null, result.error ?? null];
     this.seenCommands.set(data.commandId, outcome);
+    this.seenCommandOrder.push(data.commandId);
+    while (this.seenCommandOrder.length > MAX_SEEN_COMMANDS) {
+      const oldest = this.seenCommandOrder.shift();
+      if (oldest !== undefined) this.seenCommands.delete(oldest);
+    }
     return reply(...outcome);
   }
 

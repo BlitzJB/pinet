@@ -6,6 +6,7 @@ import { getMe, logout } from "../lib/api";
 import { useConnectionState, usePinet } from "../lib/context";
 import { cn } from "../lib/utils";
 import { mono } from "./ui/surfaces";
+import { InstallButton } from "./InstallButton";
 
 function ConnectionDot() {
   const state = useConnectionState();
@@ -91,6 +92,7 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
 
       <div className="flex flex-col gap-2 border-t border-sidebar-border px-3 py-3">
         <div className="truncate text-[11px] text-muted-foreground">{me.data?.email}</div>
+        <InstallButton />
         <div className="flex items-center gap-2">
           <Link
             to="/settings"

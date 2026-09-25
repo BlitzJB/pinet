@@ -133,7 +133,7 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
         )}
       </div>
 
-      <div className="bg-background/80 backdrop-blur">
+      <div className="bg-background/80 backdrop-blur pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex w-full max-w-[44rem] flex-col gap-2 px-4 pt-2 pb-4">
           <ConnectionState status={conn.status} error={conn.error} />
           <Composer
@@ -141,6 +141,8 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
             disabled={!state.attached}
             model={model}
             thinkingLevel={state.status?.thinkingLevel}
+            contextUsage={state.status?.contextUsage}
+            compacting={Boolean(state.status?.compacting)}
             onSend={(text) => connection.prompt(sessionId, text)}
             onStop={() => void connection.abort(sessionId).catch(() => {})}
             onCompact={() => void connection.compact(sessionId).catch(() => {})}
