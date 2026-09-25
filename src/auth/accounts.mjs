@@ -64,12 +64,13 @@ export class AccountStore {
 
   // -- accounts -------------------------------------------------------------
 
-  upsertGoogleAccount({ sub, email, name }) {
+  upsertGoogleAccount({ sub, email, name, picture }) {
     for (const account of this.accounts.values()) {
       if (account.sub === sub || account.email === email) {
         account.name = name ?? account.name;
         account.email = email;
         account.sub = sub;
+        if (picture !== undefined) account.picture = picture;
         this.#save();
         return account;
       }
@@ -79,6 +80,7 @@ export class AccountStore {
       sub,
       email,
       name: name ?? email,
+      picture: picture ?? null,
       createdAt: this.now(),
       mfa: { enrolled: false, secret: null, lastCounter: -1, recovery: [] },
     };

@@ -10,6 +10,7 @@ export interface Me {
   accountId: string;
   email: string;
   name: string;
+  avatarUrl: string | null;
   mfaEnrolled: boolean;
   devices: DeviceInfo[];
 }

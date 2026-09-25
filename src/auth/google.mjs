@@ -78,7 +78,7 @@ export class GoogleOAuth {
     if (!response.ok) throw new Error(`userinfo failed: ${response.status}`);
     const profile = await response.json();
     if (!profile.sub || !profile.email) throw new Error("userinfo missing sub/email");
-    return { sub: String(profile.sub), email: String(profile.email), name: profile.name ?? profile.email };
+    return { sub: String(profile.sub), email: String(profile.email), name: profile.name ?? profile.email, picture: profile.picture ? String(profile.picture) : null };
   }
 
   async authenticate({ code, codeVerifier }) {
@@ -134,6 +134,16 @@ export async function startMockGoogleIdp({ user = { sub: "google-sub-1", email: 
       const auth = req.headers.authorization ?? "";
       if (!auth.startsWith("Bearer at_")) return json(401, { error: "invalid_token" });
       return json(200, currentUser);
+    }
+    if (url.pathname === "/picture") {
+      // 1x1 transparent PNG, so tests can exercise the avatar proxy.
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      res.writeHead(200, { "content-type": "image/png", "content-length": String(png.length) });
+      res.end(png);
+      return;
     }
     json(404, { error: "not_found" });
   });

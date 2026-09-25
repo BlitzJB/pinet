@@ -37,6 +37,50 @@ function contentType(path) {
   return CONTENT_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
 }
 
+// Account avatars are proxied through the coordinator: the browser only ever
+// requests /me/avatar (same-origin, so the CSP stays `img-src 'self'`) and the
+// upstream fetch is pinned to known image hosts with a size and time cap.
+const AVATAR_MAX_BYTES = 512 * 1024;
+const AVATAR_TTL_MS = 60 * 60 * 1000;
+const AVATAR_MAX_ENTRIES = 200;
+
+function avatarHostAllowed(hostname, extra) {
+  const host = hostname.toLowerCase();
+  if (host === "googleusercontent.com" || host.endsWith(".googleusercontent.com")) return true;
+  return extra.has(host);
+}
+
+async function loadAvatar(rawUrl, extraHosts, fetchImpl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  if (!avatarHostAllowed(host, extraHosts)) return null;
+  // Plain HTTP is only acceptable for an operator-configured host (the test IdP).
+  if (url.protocol !== "https:" && !extraHosts.has(host)) return null;
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  try {
+    const response = await fetchImpl(url, {
+      redirect: "manual", // never follow a redirect into another host
+      signal: AbortSignal.timeout(5000),
+      headers: { accept: "image/*" },
+    });
+    if (!response.ok) return null;
+    const type = String(response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (!type.startsWith("image/")) return null;
+    const declared = Number(response.headers.get("content-length") ?? 0);
+    if (declared && declared > AVATAR_MAX_BYTES) return null;
+    const body = Buffer.from(await response.arrayBuffer());
+    if (body.length === 0 || body.length > AVATAR_MAX_BYTES) return null;
+    return { body, contentType: type };
+  } catch {
+    return null;
+  }
+}
+
 function securityHeaders(req, publicUrl) {
   const https =
     String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim() === "https" ||
@@ -253,6 +297,15 @@ function validKeys(body) {
 export function createHttpHandler({ accounts, authService, publicUrl, webDir = DEFAULT_WEB_DIR }) {
   const globalLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
   const sensitiveLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+  const fetchImpl = globalThis.fetch;
+  const avatarCache = new Map();
+  const avatarHosts = new Set();
+  try {
+    const info = authService.google?.userinfoUrl;
+    if (info) avatarHosts.add(new URL(info).hostname.toLowerCase());
+  } catch {
+    /* no avatar host beyond googleusercontent */
+  }
 
   function session(req) {
     const auth = req.headers.authorization ?? "";
@@ -386,6 +439,7 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
       // ---- authenticated endpoints ----
       const protectedPath =
         url.pathname === "/me" ||
+        url.pathname === "/me/avatar" ||
         url.pathname === "/auth/mfa/enroll" ||
         url.pathname === "/auth/mfa/activate" ||
         url.pathname.startsWith("/devices") ||
@@ -398,9 +452,33 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
           accountId: account.id,
           email: account.email,
           name: account.name,
+          avatarUrl: account.picture ? "/me/avatar" : null,
           mfaEnrolled: account.mfa.enrolled,
           devices: accounts.listDevices(account.id).map((d) => ({ id: d.id, kind: d.kind, name: d.name, revoked: d.revoked })),
         });
+      }
+
+      if (route === "GET /me/avatar") {
+        const account = accounts.getAccount(current.accountId);
+        const picture = account?.picture;
+        if (!picture) return json(res, 404, { error: "no_avatar" });
+        const now = Date.now();
+        const cached = avatarCache.get(picture);
+        let entry = cached && now - cached.at < AVATAR_TTL_MS ? cached : null;
+        if (!entry) {
+          const fetched = await loadAvatar(picture, avatarHosts, fetchImpl);
+          if (!fetched) return json(res, 404, { error: "avatar_unavailable" });
+          if (avatarCache.size >= AVATAR_MAX_ENTRIES) avatarCache.clear();
+          entry = { ...fetched, at: now };
+          avatarCache.set(picture, entry);
+        }
+        res.writeHead(200, {
+          "content-type": entry.contentType,
+          "content-length": String(entry.body.length),
+          "cache-control": "private, max-age=3600",
+        });
+        res.end(entry.body);
+        return;
       }
 
       if (route === "POST /auth/mfa/enroll") {
