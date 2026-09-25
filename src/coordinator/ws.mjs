@@ -149,9 +149,14 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
         const session = registry.openSession(ws, data);
         if (!session) {
           // Either the connection is not a host, or an existing session with this
-          // id belongs to another account. Log it: registrations used to fail here
-          // completely silently.
+          // id belongs to another account (a host that re-enrolled under a new
+          // account cannot adopt its old session). Log it *and* tell the host:
+          // registrations used to fail completely silently on both sides.
           console.log(`[hub] session.rejected ${data?.sessionId} from ${auth.deviceId}`, registry.stats());
+          send(ws, "error", {
+            code: "session_rejected",
+            message: `session ${data?.sessionId} is not available to this account`,
+          });
           return;
         }
         broadcastCatalog(auth.accountId);
