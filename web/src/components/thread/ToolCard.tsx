@@ -11,16 +11,22 @@ export interface ToolCardProps {
   error?: boolean;
   running?: boolean;
   durationMs?: number;
+  flat?: boolean;
 }
 
-export function ToolCard({ name, args, output, error, running, durationMs }: ToolCardProps) {
+export function ToolCard({ name, args, output, error, running, durationMs, flat }: ToolCardProps) {
   const [open, setOpen] = useState(false);
   const status: "running" | "complete" | "error" = running ? "running" : error ? "error" : "complete";
   const StatusIcon = status === "running" ? LoaderIcon : status === "complete" ? CheckIcon : XCircleIcon;
   const hasBody = Boolean(output && output.trim());
 
   return (
-    <div className="group/tool w-full rounded-xl border border-border/60 bg-foreground/[0.02] transition-colors hover:bg-foreground/[0.04]">
+    <div
+      className={cn(
+        "group/tool w-full rounded-lg transition-colors",
+        !flat && "border border-border/60 bg-foreground/[0.02] hover:bg-foreground/[0.04]",
+      )}
+    >
       <button
         type="button"
         onClick={() => hasBody && setOpen((value) => !value)}

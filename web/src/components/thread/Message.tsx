@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import { cn } from "../../lib/utils";
+import { CheckIcon, ChevronDownIcon, CopyIcon, Minimize2Icon } from "lucide-react";
+import { cn, formatTokens } from "../../lib/utils";
 import type { DisplayEntry } from "../../lib/pinet";
+import { segmentAssistantTurn } from "../../lib/segments";
+import { CollapsibleContent } from "../ui/collapsible";
 import { ghostButton } from "../ui/surfaces";
 import { Markdown } from "../Markdown";
-import { Reasoning } from "./Reasoning";
-import { ToolCard } from "./ToolCard";
-import { TypingIndicator } from "./TypingIndicator";
+import { ActivityGroup } from "./ActivityGroup";
 
 function CopyAction({ text, label = "Copy" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -31,9 +31,11 @@ function CopyAction({ text, label = "Copy" }: { text: string; label?: string }) 
   );
 }
 
+type GroupKind = "user" | "assistant" | "system" | "compaction";
+
 interface Group {
   key: string;
-  kind: "user" | "assistant" | "system";
+  kind: GroupKind;
   entries: DisplayEntry[];
 }
 
@@ -43,8 +45,8 @@ export function groupEntries(entries: DisplayEntry[]): Group[] {
     const key = entry.id ?? `${groups.length}`;
     if (entry.kind === "user") {
       groups.push({ key, kind: "user", entries: [entry] });
-    } else if (entry.kind === "system") {
-      groups.push({ key, kind: "system", entries: [entry] });
+    } else if (entry.kind === "system" || entry.kind === "compaction") {
+      groups.push({ key, kind: entry.kind, entries: [entry] });
     } else {
       const last = groups[groups.length - 1];
       if (last && last.kind === "assistant") last.entries.push(entry);
@@ -67,10 +69,31 @@ function UserMessage({ entry }: { entry: DisplayEntry }) {
   );
 }
 
+function CompactionNotice({ entry }: { entry: DisplayEntry }) {
+  const [open, setOpen] = useState(false);
+  const tokens = entry.tokensBefore ? formatTokens(entry.tokensBefore) : null;
+  return (
+    <div className="group flex flex-col items-center gap-1">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-foreground/[0.02] px-3 py-1 text-[12px] text-muted-foreground transition-colors hover:bg-foreground/[0.04]"
+      >
+        <Minimize2Icon className="size-3.5 shrink-0" />
+        <span>Context compacted{tokens ? ` · ${tokens} tokens summarized` : ""}</span>
+        <ChevronDownIcon className={cn("size-3 shrink-0 transition-transform duration-200", open && "rotate-180")} />
+      </button>
+      <CollapsibleContent open={open} className="w-full">
+        <div className="mx-auto mt-1 max-w-[36rem] rounded-xl border border-border/60 bg-foreground/[0.02] px-3 py-2 text-left text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+          {entry.summary || "No summary recorded."}
+        </div>
+      </CollapsibleContent>
+    </div>
+  );
+}
+
 function AssistantTurn({ group, running }: { group: Group; running: boolean }) {
-  const results = new Map<string, DisplayEntry>();
-  for (const entry of group.entries) if (entry.kind === "tool" && entry.toolCallId) results.set(entry.toolCallId, entry);
-  const consumed = new Set<string>();
+  const segments = segmentAssistantTurn(group.entries);
   const text = group.entries
     .filter((entry) => entry.kind === "assistant")
     .map((entry) => entry.text ?? "")
@@ -79,38 +102,11 @@ function AssistantTurn({ group, running }: { group: Group; running: boolean }) {
 
   return (
     <div className="group flex flex-col gap-3">
-      {group.entries.map((entry) => {
-        if (entry.kind === "assistant") {
-          return (
-            <div key={entry.id} className="flex flex-col gap-3">
-              {entry.reasoning ? <Reasoning text={entry.reasoning} active={running} /> : null}
-              {entry.text ? <Markdown text={entry.text} /> : null}
-              {entry.tools?.map((tool, index) => {
-                const result = tool.id ? results.get(tool.id) : undefined;
-                if (result?.id) consumed.add(result.id);
-                const durationMs = result?.timestamp && entry.timestamp ? result.timestamp - entry.timestamp : undefined;
-                return (
-                  <ToolCard
-                    key={tool.id ?? index}
-                    name={tool.name}
-                    args={tool.args}
-                    output={result?.text}
-                    error={result?.error}
-                    running={!result}
-                    durationMs={durationMs}
-                  />
-                );
-              })}
-            </div>
-          );
-        }
-        if (entry.kind === "tool") {
-          if (entry.id && consumed.has(entry.id)) return null;
-          return <ToolCard key={entry.id} name={entry.title ?? "tool"} output={entry.text} error={entry.error} />;
-        }
-        return null;
+      {segments.map((segment, index) => {
+        if (segment.kind === "text") return <Markdown key={`text-${index}`} text={segment.text} />;
+        const isLast = index === segments.length - 1;
+        return <ActivityGroup key={`activity-${index}`} items={segment.items} running={running && isLast} />;
       })}
-      {running && !group.entries.some((entry) => entry.tools?.length) ? <TypingIndicator /> : null}
       {text ? (
         <div className="flex h-7 items-center">
           <CopyAction text={text} label="Copy response" />
@@ -128,6 +124,7 @@ export function ThreadMessages({ entries, running }: { entries: DisplayEntry[]; 
       {groups.map((group, index) => {
         const isLast = index === groups.length - 1;
         if (group.kind === "user") return <UserMessage key={group.key} entry={group.entries[0]} />;
+        if (group.kind === "compaction") return <CompactionNotice key={group.key} entry={group.entries[0]} />;
         if (group.kind === "system") {
           return (
             <div key={group.key} className="flex items-center gap-2 text-xs text-muted-foreground">

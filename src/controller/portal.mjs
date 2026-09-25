@@ -28,7 +28,18 @@ export function describeEntry(entry) {
   }
   if (entry.type === "model_change") return { id: entry.id, kind: "system", title: "model", body: `${entry.provider}/${entry.modelId}` };
   if (entry.type === "thinking_level_change") return { id: entry.id, kind: "system", title: "thinking", body: String(entry.thinkingLevel) };
-  if (entry.type === "compaction") return { id: entry.id, kind: "system", title: "compacted", body: entry.reason ?? "manual" };
+  if (entry.type === "compaction") {
+    return {
+      id: entry.id,
+      kind: "compaction",
+      title: "compacted",
+      body: entry.summary ?? "",
+      summary: entry.summary ?? "",
+      tokensBefore: entry.tokensBefore ?? null,
+      fromHook: Boolean(entry.fromHook),
+      timestamp: entry.timestamp,
+    };
+  }
   if (entry.type === "session_info") return { id: entry.id, kind: "system", title: "session", body: entry.name ?? "(cleared)" };
   return null;
 }

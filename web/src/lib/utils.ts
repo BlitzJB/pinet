@@ -21,3 +21,9 @@ export function relativeTime(timestamp?: number): string {
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
+
+export function formatTokens(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${Math.round(count / 1_000)}k`;
+  return String(count);
+}

@@ -40,6 +40,9 @@ export default function pinet(pi: Pi): void {
   let sentIds: string[] = [];
   const runningTools = new Map<string, { toolName: string; args: unknown }>();
   const queue = createSerialQueue();
+  let currentRun: { id: string; startedAt: number } | undefined;
+  let compacting: { reason: string } | undefined;
+  let runCounter = 0;
 
   function setStatus(ctx: ExtensionContext | undefined, text: string | undefined): void {
     try {
@@ -78,6 +81,8 @@ export default function pinet(pi: Pi): void {
       thinkingLevel: ctx.thinkingLevel ?? null,
       contextUsage: ctx.getContextUsage() ?? null,
       runningTools: [...runningTools.entries()].map(([toolCallId, tool]) => ({ toolCallId, toolName: tool.toolName, args: tool.args })),
+      run: currentRun ? { id: currentRun.id, startedAt: currentRun.startedAt, state: "running" } : null,
+      compacting: compacting ? { reason: compacting.reason } : null,
     };
   }
 
@@ -361,11 +366,14 @@ export default function pinet(pi: Pi): void {
 
   pi.on("agent_start", async (_event, ctx) => {
     activeCtx = ctx;
+    runCounter += 1;
+    currentRun = { id: `run_${Date.now().toString(36)}_${runCounter.toString(36)}`, startedAt: Date.now() };
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
     activeCtx = ctx;
+    currentRun = undefined;
     runningTools.clear();
     syncEntries(ctx);
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
@@ -386,9 +394,23 @@ export default function pinet(pi: Pi): void {
     safe(() => bridge?.publishMeta(buildMeta(ctx)));
   });
 
+  pi.on("session_before_compact", async (event, ctx) => {
+    activeCtx = ctx;
+    compacting = { reason: event.reason ?? "manual" };
+    safe(() => bridge?.publishStatus(buildStatus(ctx)));
+  });
+
   pi.on("session_compact", async (_event, ctx) => {
     activeCtx = ctx;
+    compacting = undefined;
     safe(() => bridge?.publishRebase(ctx.sessionManager.getEntries() as unknown as Json[], ctx.sessionManager.getLeafId() ?? null));
+    safe(() => bridge?.publishStatus(buildStatus(ctx)));
+  });
+
+  pi.on("session_compact_failed", async (_event, ctx) => {
+    activeCtx = ctx;
+    compacting = undefined;
+    safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("session_tree", async (_event, ctx) => {

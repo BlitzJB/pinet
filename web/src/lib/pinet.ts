@@ -3,6 +3,7 @@ import { describeEntry } from "../../../src/controller/portal.mjs";
 import { webCryptoProvider } from "../../../src/crypto/webcrypto.mjs";
 import type { ServerSession } from "./api";
 import { ensureDevice, loadDevice, clearDevice, type StoredDevice } from "./device";
+import type { Outbox } from "./run-state";
 import { Store } from "./store";
 
 export interface DisplayEntry {
@@ -11,8 +12,14 @@ export interface DisplayEntry {
   title?: string;
   body?: string;
   text?: string;
-  tools?: { name: string; args?: string }[];
+  reasoning?: string;
+  tools?: { id?: string; name: string; args?: string }[];
+  toolCallId?: string;
+  timestamp?: number;
   error?: boolean;
+  summary?: string;
+  tokensBefore?: number | null;
+  fromHook?: boolean;
 }
 
 export interface SessionStatus {
@@ -22,6 +29,8 @@ export interface SessionStatus {
   thinkingLevel?: string | null;
   contextUsage?: { tokens?: number | null; contextWindow?: number; percent?: number | null } | null;
   runningTools?: unknown[];
+  run?: { id?: string; startedAt?: number; state?: string } | null;
+  compacting?: { reason?: string } | null;
 }
 
 export interface SessionMeta {
@@ -41,6 +50,7 @@ export interface SessionState {
   mode: AttachmentMode;
   attached: boolean;
   pendingEchoes: number;
+  outbox: Outbox | null;
 }
 
 export type ConnStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
@@ -77,6 +87,7 @@ export class PinetConnection {
         mode: "control",
         attached: false,
         pendingEchoes: 0,
+        outbox: null,
       });
       this.stores.set(sessionId, store);
     }
@@ -143,7 +154,21 @@ export class PinetConnection {
     controller.on("snapshot", (data: any) => this.#applyFull(data.sessionId, data.entries, data.status, data.meta, data.epoch));
     controller.on("rebase", (data: any) => this.#applyFull(data.sessionId, data.entries, undefined, undefined, data.epoch));
     controller.on("entries", (data: any) => this.#applyDelta(data.sessionId, data.entries, data.epoch));
-    controller.on("status", (data: any) => this.store(data.sessionId).set({ status: data.status ?? null, epoch: data.epoch ?? 0 }));
+    controller.on("status", (data: any) => {
+      const store = this.store(data.sessionId);
+      const status: SessionStatus | null = data.status ?? null;
+      store.set((state) => {
+        let outbox = state.outbox;
+        if (outbox && outbox.status !== "error") {
+          if (status?.run) {
+            outbox = { ...outbox, status: "working", sawRun: true };
+          } else if (outbox.sawRun && (status?.isIdle === true || status?.phase === "idle")) {
+            outbox = null;
+          }
+        }
+        return { status, epoch: data.epoch ?? 0, outbox };
+      });
+    });
     controller.on("meta", (data: any) => this.store(data.sessionId).set({ meta: data.meta ?? null }));
     controller.on("removed", (data: any) => this.store(data.sessionId).set({ attached: false }));
     controller.on("decrypt_error", () => this.conn.set((state) => ({ ...state })));
@@ -165,18 +190,38 @@ export class PinetConnection {
     this.store(sessionId).set({ attached: false });
   }
 
-  /** Optimistically echo the user's message, then send it. */
-  async prompt(sessionId: string, text: string): Promise<void> {
+  /** Optimistically echo the user's message, then send it and track delivery. */
+  async prompt(sessionId: string, text: string): Promise<unknown> {
     if (!this.controller) throw new Error("not connected");
     const store = this.store(sessionId);
     store.set((state) => ({
       entries: [...state.entries, { id: `local-${localId()}`, kind: "user", title: "you", body: text, text }],
       pendingEchoes: state.pendingEchoes + 1,
+      outbox: { status: "sending", at: Date.now(), entriesAt: state.entries.length + 1, sawRun: false },
     }));
     try {
-      await this.controller.command(sessionId, "prompt", { text });
+      const ack = (await this.controller.command(sessionId, "prompt", { text })) as { accepted?: boolean; mode?: string; error?: string } | undefined;
+      if (ack && ack.accepted === false) {
+        store.set((state) => ({
+          pendingEchoes: Math.max(0, state.pendingEchoes - 1),
+          outbox: { status: "error", at: Date.now(), error: ack.error ?? "rejected" },
+        }));
+        return ack;
+      }
+      store.set((state) => {
+        const outbox = state.outbox;
+        if (outbox && outbox.status === "sending") {
+          const status = ack?.mode === "immediate" ? "delivered" : "queued";
+          return { outbox: { ...outbox, status, mode: ack?.mode } };
+        }
+        return {};
+      });
+      return ack;
     } catch (error) {
-      store.set((state) => ({ pendingEchoes: Math.max(0, state.pendingEchoes - 1) }));
+      store.set((state) => ({
+        pendingEchoes: Math.max(0, state.pendingEchoes - 1),
+        outbox: { status: "error", at: Date.now(), error: String((error as Error)?.message ?? error) },
+      }));
       throw error;
     }
   }

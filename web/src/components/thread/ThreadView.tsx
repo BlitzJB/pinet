@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowDownIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useConnectionState, usePinet, useSessionState } from "../../lib/context";
+import { deriveRunFeedback } from "../../lib/run-state";
 import { ghostButton, mono } from "../ui/surfaces";
 import { ThreadMessages } from "./Message";
 import { Composer } from "./Composer";
 import { ConnectionState } from "./ConnectionState";
+import { RunIndicator } from "./RunIndicator";
 
 const SUGGESTIONS = [
   "Summarize the current state of this session",
@@ -68,6 +70,14 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
 
   const running = state.status?.phase === "running" || state.status?.isIdle === false;
   const model = state.status?.model;
+  const runningTools = Array.isArray(state.status?.runningTools) ? state.status.runningTools.length : 0;
+  const feedback = deriveRunFeedback({
+    outbox: state.outbox,
+    running,
+    runningTools,
+    entryCount: state.entries.length,
+    compacting: Boolean(state.status?.compacting),
+  });
 
   return (
     <div className="flex h-full flex-col">
@@ -104,6 +114,9 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
           ) : (
             <ThreadMessages entries={state.entries} running={running} />
           )}
+          <div className="pt-1">
+            <RunIndicator feedback={feedback} />
+          </div>
         </div>
         {!atBottom && (
           <button
