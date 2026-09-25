@@ -8,6 +8,10 @@ import { SessionSidebar } from "../components/SessionSidebar";
 import { cn } from "../lib/utils";
 
 const DRAWER_WIDTH = 288;
+// Horizontal travel (and dominance over vertical) required before a touch is
+// treated as a drag rather than a tap.
+const COMMIT_PX = 18;
+const COMMIT_RATIO = 1.6;
 // Android's gesture navigation reserves a strip along each edge for the system
 // back gesture and there is no web API to opt out (that needs a native shell's
 // `setSystemGestureExclusionRects`). We do everything a PWA can:
@@ -51,8 +55,16 @@ function useEdgeSwipeDrawer() {
       const dx = touch.clientX - active.x;
       const dy = touch.clientY - active.y;
       if (!active.committed) {
-        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-        if (Math.abs(dy) > Math.abs(dx)) {
+        const ax = Math.abs(dx);
+        const ay = Math.abs(dy);
+        // A tap always jitters a few px. Require a clearly horizontal drag
+        // before claiming the gesture, otherwise preventDefault() would cancel
+        // the click on the link/button the user actually tapped.
+        if (ax < COMMIT_PX) {
+          if (ay > COMMIT_PX) gesture.current = null; // clearly vertical: let it scroll
+          return;
+        }
+        if (ax < ay * COMMIT_RATIO) {
           gesture.current = null;
           return;
         }

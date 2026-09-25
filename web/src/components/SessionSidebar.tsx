@@ -286,7 +286,7 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
                           event.stopPropagation();
                           setEditing(session.sessionId);
                         }}
-                        className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/[0.08] hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                        className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-40 transition-opacity hover:bg-foreground/[0.08] hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
                       >
                         <PencilIcon className="size-3.5" />
                       </button>
