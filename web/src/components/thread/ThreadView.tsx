@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDownIcon } from "lucide-react";
+import { ArrowDownIcon, Loader2Icon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useConnectionState, usePinet, useSessionState } from "../../lib/context";
 import { deriveRunFeedback } from "../../lib/run-state";
@@ -15,6 +15,20 @@ const SUGGESTIONS = [
   "Run the test suite and report back",
   "Explain the last change you made",
 ];
+
+/** Show a flag only once it has stayed true past `delay` (avoids flicker). */
+function useDelayedTrue(value: boolean, delay: number): boolean {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (!value) {
+      setShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setShown(true), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return shown;
+}
 
 function Welcome({ name, onPrompt }: { name?: string | null; onPrompt: (text: string) => void }) {
   return (
@@ -49,6 +63,7 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
   const state = useSessionState(sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
+  const refreshing = useDelayedTrue(Boolean(state.syncing), 250);
 
   useEffect(() => {
     if (conn.status !== "connected" || state.attached) return;
@@ -81,7 +96,21 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
   const cwd = state.meta?.cwd;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
+      {/* Transient indicator; opacity-only so it never shifts layout. */}
+      <div className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center px-4">
+        <div
+          role="status"
+          aria-hidden={!refreshing}
+          className={cn(
+            "flex items-center gap-2 rounded-full border border-border/60 bg-background/85 px-3 py-1.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur transition-opacity duration-200 motion-reduce:transition-none",
+            refreshing ? "opacity-100" : "opacity-0",
+          )}
+        >
+          <Loader2Icon className="size-3 animate-spin motion-reduce:animate-none" />
+          Refreshing…
+        </div>
+      </div>
       <div
         ref={scrollRef}
         onScroll={(event) => {

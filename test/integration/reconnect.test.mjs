@@ -103,6 +103,29 @@ describe("network resilience", () => {
     bridge.close();
   });
 
+  it("detects a sequence gap and resyncs with a fresh snapshot", async () => {
+    const { bridge } = makeHost();
+    await bridge.connect();
+    bridge.openSession({ sessionId: SESSION });
+    const controller = await makeController("ctl-gap", true);
+    await controller.attach(SESSION, "control");
+
+    const gaps = [];
+    controller.on("gap", (data) => gaps.push(data));
+
+    bridge.publishStatus({ phase: "idle" });
+    bridge.session.seq += 5; // simulate dropped durable frames
+    const resynced = waitFor(controller, "resynced", () => true, 15_000);
+    bridge.publishStatus({ phase: "running" });
+
+    await resynced;
+    expect(gaps.length).toBeGreaterThan(0);
+    expect(gaps[0]).toMatchObject({ sessionId: SESSION });
+
+    controller.close();
+    bridge.close();
+  });
+
   it("does not reconnect when closed deliberately", async () => {
     const { bridge } = makeHost();
     await bridge.connect();

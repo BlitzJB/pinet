@@ -49,6 +49,8 @@ export interface SessionState {
   epoch: number;
   mode: AttachmentMode;
   attached: boolean;
+  /** True while a full refetch (initial attach / gap resync) is in flight. */
+  syncing: boolean;
   pendingEchoes: number;
   outbox: Outbox | null;
 }
@@ -86,6 +88,7 @@ export class PinetConnection {
         epoch: 0,
         mode: "control",
         attached: false,
+        syncing: false,
         pendingEchoes: 0,
         outbox: null,
       });
@@ -150,7 +153,12 @@ export class PinetConnection {
     controller.on("disconnected", () => this.conn.set({ status: "reconnecting" }));
     controller.on("reconnecting", () => this.conn.set({ status: "reconnecting" }));
     controller.on("reconnected", () => this.conn.set({ status: "connected" }));
-    controller.on("resynced", () => this.conn.set({ status: "connected" }));
+    controller.on("gap", (data: any) => this.store(data.sessionId).set({ syncing: true }));
+    controller.on("resynced", (data: any) => {
+      for (const id of (data?.sessions ?? []) as string[]) this.store(id).set({ syncing: false });
+      this.conn.set({ status: "connected" });
+    });
+    controller.on("resync_error", (data: any) => this.store(data.sessionId).set({ syncing: false }));
     controller.on("snapshot", (data: any) => this.#applyFull(data.sessionId, data.entries, data.status, data.meta, data.epoch));
     controller.on("rebase", (data: any) => this.#applyFull(data.sessionId, data.entries, undefined, undefined, data.epoch));
     controller.on("entries", (data: any) => this.#applyDelta(data.sessionId, data.entries, data.epoch));
@@ -181,13 +189,19 @@ export class PinetConnection {
 
   async attach(sessionId: string, mode: AttachmentMode = "control"): Promise<void> {
     if (!this.controller) throw new Error("not connected");
-    await this.controller.attach(sessionId, mode);
-    this.store(sessionId).set({ attached: true, mode });
+    this.store(sessionId).set({ syncing: true });
+    try {
+      await this.controller.attach(sessionId, mode);
+      this.store(sessionId).set({ attached: true, mode });
+    } catch (error) {
+      this.store(sessionId).set({ syncing: false });
+      throw error;
+    }
   }
 
   detach(sessionId: string): void {
     this.controller?.detach(sessionId);
-    this.store(sessionId).set({ attached: false });
+    this.store(sessionId).set({ attached: false, syncing: false });
   }
 
   /** Optimistically echo the user's message, then send it and track delivery. */
@@ -290,6 +304,6 @@ export class PinetConnection {
       }
       mapped.push(record);
     }
-    store.set({ entries: mapped, pendingEchoes: pending, epoch: epoch ?? state.epoch });
+    store.set({ entries: mapped, pendingEchoes: pending, syncing: false, epoch: epoch ?? state.epoch });
   }
 }

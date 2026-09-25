@@ -193,6 +193,7 @@ export class PinetController extends Emitter {
       this.keys.delete(sessionId);
       this.seqTracker.reset(sessionId);
       this.attach(sessionId, mode)
+        .then(() => this.emit("resynced", { sessions: [sessionId] }))
         .catch((error) => this.emit("resync_error", { sessionId, error: String(error?.message ?? error) }))
         .finally(() => this.resyncing.delete(sessionId));
     }, 0);
