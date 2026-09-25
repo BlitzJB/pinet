@@ -7,7 +7,14 @@ import { SettingsPage } from "./routes/settings";
 const rootRoute = createRootRoute({ component: Root });
 
 const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: WelcomePage });
-const sessionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/s/$sessionId", component: SessionPage });
+const sessionRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/s/$sessionId",
+  component: SessionPage,
+  // Side panes live in the URL so a split survives reload and can be shared.
+  validateSearch: (search: Record<string, unknown>): { side?: string } =>
+    typeof search.side === "string" && search.side ? { side: search.side } : {},
+});
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
 
 const routeTree = rootRoute.addChildren([indexRoute, sessionRoute, settingsRoute]);

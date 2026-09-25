@@ -1,11 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRightIcon, Loader2Icon, MessageSquareIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { ChevronRightIcon, Loader2Icon, MessageSquareIcon, MoreVerticalIcon, PanelRightIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { getMe, type ServerSession } from "../lib/api";
 import { useConnectionState, usePinet } from "../lib/context";
 import { groupSessionsByHost } from "../lib/session-groups";
 import { cn } from "../lib/utils";
+import { usePanes } from "../lib/use-panes";
+import { AnchoredMenu, menuItem } from "./ui/AnchoredMenu";
 import { RenameInput } from "./ui/RenameInput";
 import { Avatar } from "./Avatar";
 
@@ -42,10 +44,46 @@ function ConnectionDot() {
   );
 }
 
-export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionId?: string; onNavigate?: () => void }) {
+/** Session row actions (presentational; availability is resolved by the caller). */
+function RowMenu({
+  anchor,
+  availability,
+  onClose,
+  onRename,
+  onOpenSide,
+}: {
+  anchor: HTMLElement;
+  availability: { allowed: boolean; reason?: string };
+  onClose: () => void;
+  onRename: () => void;
+  onOpenSide: () => void;
+}) {
+  return (
+    <AnchoredMenu anchor={anchor} onClose={onClose}>
+      <button type="button" role="menuitem" className={menuItem} onClick={onRename}>
+        <PencilIcon className="size-3.5 text-muted-foreground" />
+        Rename
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className={menuItem}
+        disabled={!availability.allowed}
+        title={availability.reason}
+        onClick={onOpenSide}
+      >
+        <PanelRightIcon className="size-3.5 text-muted-foreground" />
+        Open to the side
+      </button>
+    </AnchoredMenu>
+  );
+}
+
+export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const connection = usePinet();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { primary: activeSessionId, side: sidePaneIds, availability, searchFor, openToSide } = usePanes();
   const me = useQuery({ queryKey: ["me"], queryFn: getMe, retry: false, staleTime: 30_000 });
   const catalog = useQuery({ queryKey: ["catalog"], queryFn: () => connection.list(), refetchInterval: 5_000 });
   const [filter, setFilter] = useState("");
@@ -57,6 +95,7 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
   const [spawnMode, setSpawnMode] = useState("session");
   const [spawnBusy, setSpawnBusy] = useState(false);
   const [spawnError, setSpawnError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
 
   // A rename is shown immediately; once the coordinator's catalog agrees (host
   // has published the new meta) the local override is no longer needed.
@@ -81,6 +120,7 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
       : session,
   );
   const groups = groupSessionsByHost(sessions, filter);
+  const menuPane = menu ? availability(menu.id) : { allowed: false };
   const searching = filter.trim().length > 0;
 
   function toggleHost(hostId: string) {
@@ -271,25 +311,33 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
                       key={session.sessionId}
                       to="/s/$sessionId"
                       params={{ sessionId: session.sessionId }}
+                      search={() => searchFor(session.sessionId)}
                       onClick={onNavigate}
                       className={cn(
-                        "group flex items-center gap-2.5 rounded-lg py-2 ps-8 pe-2.5 transition-colors",
+                        "group flex items-center gap-2.5 rounded-lg py-2 ps-8 pe-1.5 transition-colors",
                         active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-foreground/[0.04]",
                       )}
                     >
                       <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
                       <span className="min-w-0 flex-1 truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
+                      {sidePaneIds.includes(session.sessionId) && (
+                        <PanelRightIcon
+                          className="size-3 shrink-0 text-muted-foreground/50"
+                          aria-label="Open in a side pane"
+                        />
+                      )}
                       <button
                         type="button"
-                        aria-label="Rename session"
+                        aria-label="Session actions"
+                        aria-haspopup="menu"
                         onClick={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
-                          setEditing(session.sessionId);
+                          setMenu({ id: session.sessionId, anchor: event.currentTarget });
                         }}
                         className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-40 transition-opacity hover:bg-foreground/[0.08] hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
                       >
-                        <PencilIcon className="size-3.5" />
+                        <MoreVerticalIcon className="size-3.5" />
                       </button>
                     </Link>
                   );
@@ -317,6 +365,24 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
           <SettingsIcon className="size-4 shrink-0 text-muted-foreground/40 transition-colors duration-200 group-hover/account:text-muted-foreground" />
         </Link>
       </div>
+      {menu && (
+        <RowMenu
+          anchor={menu.anchor}
+          availability={menuPane}
+          onClose={() => setMenu(null)}
+          onRename={() => {
+            setEditing(menu.id);
+            setMenu(null);
+            onNavigate?.();
+          }}
+          onOpenSide={() => {
+            const target = menu.id;
+            setMenu(null);
+            onNavigate?.();
+            openToSide(target);
+          }}
+        />
+      )}
     </aside>
   );
 }

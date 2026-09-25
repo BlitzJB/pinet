@@ -1,7 +1,5 @@
-import { useParams } from "@tanstack/react-router";
-import { ThreadView } from "../components/thread/ThreadView";
+import { SessionPanes } from "../components/thread/SessionPanes";
 
 export function SessionPage() {
-  const { sessionId } = useParams({ from: "/s/$sessionId" });
-  return <ThreadView key={sessionId} sessionId={sessionId} />;
+  return <SessionPanes />;
 }

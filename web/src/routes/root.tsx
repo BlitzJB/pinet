@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Outlet, useRouterState } from "@tanstack/react-router";
+import { Outlet } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRightIcon } from "lucide-react";
 import { getMe, loginUrl } from "../lib/api";
@@ -141,8 +141,6 @@ function Login() {
 }
 
 function AppShell() {
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const activeSessionId = pathname.match(/\/s\/([^/]+)/)?.[1];
   const swipe = useEdgeSwipeDrawer();
   const offset = swipe.offset ?? (swipe.open ? 0 : -100);
   const dragging = swipe.offset !== null;
@@ -150,7 +148,7 @@ function AppShell() {
   return (
     <div ref={swipe.ref} className="flex h-full">
       <div className="hidden md:flex">
-        <SessionSidebar activeSessionId={activeSessionId} />
+        <SessionSidebar />
       </div>
 
       <div className={cn("fixed inset-0 z-40 md:hidden", !swipe.open && !dragging && "pointer-events-none")}>
@@ -169,7 +167,7 @@ function AppShell() {
             !dragging && "transition-transform duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
           )}
         >
-          <SessionSidebar activeSessionId={activeSessionId} onNavigate={() => swipe.setOpen(false)} />
+          <SessionSidebar onNavigate={() => swipe.setOpen(false)} />
         </div>
       </div>
 
