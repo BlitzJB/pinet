@@ -124,7 +124,10 @@ export class HostBridge extends EventEmitter {
 
   publishMeta(meta) {
     this.session.meta = meta;
-    this.#publish("session.meta", { meta });
+    // meta (name/cwd/host) is published in the clear, exactly like
+    // `session.opened`, so the coordinator's catalog reflects renames without
+    // it needing to read any session payload.
+    this.socket.send("session.meta", { meta }, { sessionId: this.session.sessionId, epoch: this.session.epoch });
   }
 
   #publish(type, payload) {

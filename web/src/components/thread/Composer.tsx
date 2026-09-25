@@ -10,6 +10,8 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 export function Composer({
   busy,
   disabled,
+  attached,
+  mode,
   model,
   thinkingLevel,
   contextUsage,
@@ -21,6 +23,8 @@ export function Composer({
 }: {
   busy: boolean;
   disabled: boolean;
+  attached?: boolean;
+  mode?: string | null;
   model?: { provider: string; id: string } | null;
   thinkingLevel?: string | null;
   contextUsage?: { tokens?: number | null; contextWindow?: number; percent?: number | null } | null;
@@ -67,6 +71,20 @@ export function Composer({
       />
       <div className="flex items-center gap-1 px-1">
         <div className="flex min-w-0 items-center gap-1">
+          <span
+            aria-label={!attached ? "Not attached" : mode === "control" ? "Control" : "Read-only"}
+            title={
+              !attached
+                ? "Not attached to this session"
+                : mode === "control"
+                  ? "Control — you can send commands"
+                  : `Attached (${mode ?? "read-only"})`
+            }
+            className={cn(
+              "ms-1.5 size-2 shrink-0 rounded-full",
+              !attached ? "bg-foreground/25" : mode === "control" ? "bg-emerald-500" : "bg-amber-400",
+            )}
+          />
           {model && (
             <span
               className={cn(mono, "hidden max-w-[10rem] truncate rounded-full bg-foreground/[0.05] px-2 py-1 text-foreground/45 sm:inline-block")}

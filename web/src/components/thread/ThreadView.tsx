@@ -3,7 +3,7 @@ import { ArrowDownIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useConnectionState, usePinet, useSessionState } from "../../lib/context";
 import { deriveRunFeedback } from "../../lib/run-state";
-import { ghostButton, mono } from "../ui/surfaces";
+import { ghostButton } from "../ui/surfaces";
 import { ThreadMessages } from "./Message";
 import { Composer } from "./Composer";
 import { ConnectionState } from "./ConnectionState";
@@ -78,28 +78,10 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
     entryCount: state.entries.length,
     compacting: Boolean(state.status?.compacting),
   });
+  const cwd = state.meta?.cwd;
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-border/60 px-4 py-2.5">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium">{state.meta?.name ?? sessionId}</div>
-          <div className="truncate text-[11px] text-muted-foreground">
-            {state.meta?.host ?? ""}
-            {state.meta?.cwd ? ` · ${state.meta.cwd}` : ""}
-          </div>
-        </div>
-        <span
-          className={cn(
-            mono,
-            "ms-auto shrink-0 rounded-full px-2 py-1",
-            state.attached ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-foreground/[0.05] text-foreground/40",
-          )}
-        >
-          {state.attached ? state.mode : "not attached"}
-        </span>
-      </header>
-
       <div
         ref={scrollRef}
         onScroll={(event) => {
@@ -134,11 +116,13 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
       </div>
 
       <div className="bg-background/80 backdrop-blur pb-[env(safe-area-inset-bottom)]">
-        <div className="mx-auto flex w-full max-w-[44rem] flex-col gap-2 px-4 pt-2 pb-4">
+        <div className="mx-auto flex w-full max-w-[44rem] flex-col gap-1.5 px-4 pt-2 pb-1.5">
           <ConnectionState status={conn.status} error={conn.error} />
           <Composer
             busy={running}
             disabled={!state.attached}
+            attached={state.attached}
+            mode={state.mode}
             model={model}
             thinkingLevel={state.status?.thinkingLevel}
             contextUsage={state.status?.contextUsage}
@@ -148,6 +132,11 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
             onCompact={() => void connection.compact(sessionId).catch(() => {})}
             onThinking={(level) => void connection.setThinking(sessionId, level).catch(() => {})}
           />
+          {cwd && (
+            <div className="truncate px-1 text-center text-[11px] leading-tight text-muted-foreground/50" title={cwd}>
+              {cwd}
+            </div>
+          )}
         </div>
       </div>
     </div>

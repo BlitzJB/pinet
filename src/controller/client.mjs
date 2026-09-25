@@ -252,6 +252,12 @@ export class PinetController extends Emitter {
       this.emit("gap", { sessionId, epoch, seq: data.seq });
       this.#scheduleResync(sessionId);
     }
+    // Meta updates travel in the clear (like `session.opened`) so the
+    // coordinator can keep its catalog current. No group key needed.
+    if (type === "session.meta" && data.meta !== undefined && data.enc === undefined) {
+      if (this.keys.has(sessionId)) this.emit("meta", { sessionId, epoch, seq: data.seq, meta: data.meta });
+      return;
+    }
     const entry = this.keys.get(sessionId);
     if (!entry) return;
     let payload;

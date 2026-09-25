@@ -1,14 +1,32 @@
 import { useState } from "react";
-import { ChevronDownIcon, LoaderIcon, SparklesIcon } from "lucide-react";
+import { ChevronDownIcon, SparklesIcon } from "lucide-react";
 import { cn, formatDuration } from "../../lib/utils";
 import { summarizeActivity, type ActivityItem } from "../../lib/segments";
 import { CollapsibleContent } from "../ui/collapsible";
 import { mono, ShimmerLabel } from "../ui/surfaces";
 import { ToolCard } from "./ToolCard";
 
+/** A 3×3 dot matrix with a diagonal pulse — the running indicator. */
+function DotMatrix({ running }: { running: boolean }) {
+  return (
+    <span className="grid shrink-0 grid-cols-3 gap-[2.5px]" aria-hidden>
+      {Array.from({ length: 9 }).map((_, index) => (
+        <span
+          key={index}
+          style={running ? { animationDelay: `${(Math.floor(index / 3) + (index % 3)) * 90}ms` } : undefined}
+          className={cn(
+            "size-[3px] rounded-full",
+            running ? "pinet-dot bg-blue-500 motion-reduce:animate-none" : "bg-muted-foreground/40",
+          )}
+        />
+      ))}
+    </span>
+  );
+}
+
 export function ActivityGroup({ items, running }: { items: ActivityItem[]; running: boolean }) {
-  // Open while the work is in progress so progress is visible; collapsed once done.
-  const [open, setOpen] = useState(running);
+  // Collapsed by default; the header still reports live progress.
+  const [open, setOpen] = useState(false);
   const runningTool = items.find((item) => item.type === "tool" && item.running) as
     | (ActivityItem & { name?: string })
     | undefined;
@@ -24,7 +42,7 @@ export function ActivityGroup({ items, running }: { items: ActivityItem[]; runni
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-muted-foreground outline-none transition-colors hover:bg-foreground/[0.03]"
       >
         {running ? (
-          <LoaderIcon className="size-3.5 shrink-0 animate-spin text-blue-500 motion-reduce:animate-none" />
+          <DotMatrix running />
         ) : (
           <SparklesIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
         )}

@@ -165,6 +165,7 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
         if (!session || !registry.ownsSession(ws, sessionId)) return;
         const epoch = route.epoch ?? data.epoch ?? 0;
         session.epoch = epoch;
+        if ((type === "session.meta" || type === "session.snapshot") && data.meta !== undefined) session.meta = data.meta;
         const msg = { v: 1, id: randomUUID(), type, ts: Date.now(), route: { sessionId, epoch }, data };
         const text = JSON.stringify(msg);
         for (const sub of session.subscribers) if (sub.readyState === 1) sub.send(text);

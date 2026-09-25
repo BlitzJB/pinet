@@ -1,12 +1,25 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquareIcon, SearchIcon } from "lucide-react";
+import { ChevronRightIcon, MessageSquareIcon, PencilIcon, SearchIcon, ServerIcon } from "lucide-react";
 import { getMe, logout } from "../lib/api";
 import { useConnectionState, usePinet } from "../lib/context";
+import { groupSessionsByHost } from "../lib/session-groups";
 import { cn } from "../lib/utils";
 import { mono } from "./ui/surfaces";
+import { RenameInput } from "./ui/RenameInput";
 import { InstallButton } from "./InstallButton";
+
+const COLLAPSE_KEY = "pinet.collapsedHosts";
+
+function loadCollapsed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
 
 function ConnectionDot() {
   const state = useConnectionState();
@@ -30,14 +43,65 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
   const me = useQuery({ queryKey: ["me"], queryFn: getMe, retry: false, staleTime: 30_000 });
   const catalog = useQuery({ queryKey: ["catalog"], queryFn: () => connection.list(), refetchInterval: 5_000 });
   const [filter, setFilter] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [localNames, setLocalNames] = useState<Record<string, string>>({});
 
-  const sessions = (catalog.data ?? []).filter((session) => {
-    if (!filter) return true;
-    const needle = filter.toLowerCase();
-    return [session.meta?.name, session.hostName, session.meta?.cwd, session.sessionId]
-      .filter(Boolean)
-      .some((field) => String(field).toLowerCase().includes(needle));
-  });
+  // A rename is shown immediately; once the coordinator's catalog agrees (host
+  // has published the new meta) the local override is no longer needed.
+  useEffect(() => {
+    if (!catalog.data) return;
+    setLocalNames((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const session of catalog.data!) {
+        if (next[session.sessionId] && session.meta?.name === next[session.sessionId]) {
+          delete next[session.sessionId];
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [catalog.data]);
+
+  const sessions = (catalog.data ?? []).map((session) =>
+    localNames[session.sessionId]
+      ? { ...session, meta: { ...(session.meta ?? {}), name: localNames[session.sessionId] } }
+      : session,
+  );
+  const groups = groupSessionsByHost(sessions, filter);
+  const searching = filter.trim().length > 0;
+
+  function toggleHost(hostId: string) {
+    setCollapsed((previous) => {
+      const next = new Set(previous);
+      if (next.has(hostId)) next.delete(hostId);
+      else next.add(hostId);
+      try {
+        localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next]));
+      } catch {
+        /* private mode */
+      }
+      return next;
+    });
+  }
+
+  async function saveName(sessionId: string, name: string) {
+    setEditing(null);
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setLocalNames((previous) => ({ ...previous, [sessionId]: trimmed }));
+    try {
+      await connection.rename(sessionId, trimmed);
+    } catch {
+      setLocalNames((previous) => {
+        const next = { ...previous };
+        delete next[sessionId];
+        return next;
+      });
+    }
+    void queryClient.invalidateQueries({ queryKey: ["catalog"] });
+  }
 
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
@@ -60,32 +124,82 @@ export function SessionSidebar({ activeSessionId, onNavigate }: { activeSessionI
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {catalog.isLoading && <p className="px-2 py-2 text-xs text-muted-foreground">Loading…</p>}
-        {!catalog.isLoading && sessions.length === 0 && (
-          <p className="px-2 py-2 text-xs text-muted-foreground">No sessions. Run <code>/pinet setup</code> on a host.</p>
+        {!catalog.isLoading && groups.length === 0 && (
+          <p className="px-2 py-2 text-xs text-muted-foreground">
+            {searching ? "No matching sessions." : <>No sessions. Run <code>/pinet setup</code> on a host.</>}
+          </p>
         )}
-        {sessions.map((session) => {
-          const active = session.sessionId === activeSessionId;
+
+        {groups.map((group) => {
+          const isCollapsed = !searching && collapsed.has(group.hostId);
           return (
-            <Link
-              key={session.sessionId}
-              to="/s/$sessionId"
-              params={{ sessionId: session.sessionId }}
-              onClick={onNavigate}
-              className={cn(
-                "group flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors",
-                active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-foreground/[0.04]",
-              )}
-            >
-              <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
-              <span
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full",
-                  session.hostConnected ? "bg-emerald-500" : "bg-foreground/20",
-                )}
-                title={session.hostConnected ? "host online" : "host offline"}
-              />
-            </Link>
+            <section key={group.hostId} className="mb-1">
+              <button
+                type="button"
+                onClick={() => toggleHost(group.hostId)}
+                className="group flex w-full items-center gap-2 rounded-lg px-2.5 pt-2.5 pb-1.5 text-start transition-colors hover:bg-foreground/[0.03]"
+                title={group.hostId}
+              >
+                <ChevronRightIcon
+                  className={cn(
+                    "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200",
+                    !isCollapsed && "rotate-90",
+                  )}
+                />
+                <ServerIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  {group.hostName}
+                </span>
+                <span
+                  className={cn("size-1.5 shrink-0 rounded-full", group.hostConnected ? "bg-emerald-500" : "bg-foreground/20")}
+                  title={group.hostConnected ? "host online" : "host offline"}
+                />
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">{group.sessions.length}</span>
+              </button>
+
+              {!isCollapsed &&
+                group.sessions.map((session) => {
+                  const active = session.sessionId === activeSessionId;
+                  if (editing === session.sessionId) {
+                    return (
+                      <div key={session.sessionId} className="px-2.5 py-1">
+                        <RenameInput
+                          value={session.meta?.name ?? ""}
+                          onSave={(name) => void saveName(session.sessionId, name)}
+                          onCancel={() => setEditing(null)}
+                        />
+                      </div>
+                    );
+                  }
+                  return (
+                    <Link
+                      key={session.sessionId}
+                      to="/s/$sessionId"
+                      params={{ sessionId: session.sessionId }}
+                      onClick={onNavigate}
+                      className={cn(
+                        "group flex items-center gap-2.5 rounded-lg py-2 ps-8 pe-2.5 transition-colors",
+                        active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-foreground/[0.04]",
+                      )}
+                    >
+                      <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
+                      <button
+                        type="button"
+                        aria-label="Rename session"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setEditing(session.sessionId);
+                        }}
+                        className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/[0.08] hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                      >
+                        <PencilIcon className="size-3.5" />
+                      </button>
+                    </Link>
+                  );
+                })}
+            </section>
           );
         })}
       </div>

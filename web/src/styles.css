@@ -115,6 +115,10 @@ html,
 body,
 #root {
   height: 100%;
+  /* Suppress Chrome/Android horizontal swipe-to-navigate so the app's own
+     edge gesture is not stolen. The OS-level back gesture is native and
+     cannot be disabled from a web page (see root.tsx). */
+  overscroll-behavior-x: none;
 }
 
 body {
@@ -124,6 +128,22 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Dot-matrix running indicator (see ActivityGroup.tsx). */
+@keyframes pinet-dot {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: scale(0.7);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.pinet-dot {
+  animation: pinet-dot 1.1s ease-in-out infinite;
 }
 
 /* Shimmer text used for active reasoning / working labels. */

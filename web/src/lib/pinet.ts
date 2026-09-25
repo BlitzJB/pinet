@@ -237,8 +237,19 @@ export class PinetConnection {
   setThinking(sessionId: string, level: string): Promise<unknown> {
     return this.controller!.command(sessionId, "set_thinking", { level });
   }
-  rename(sessionId: string, name: string): Promise<unknown> {
-    return this.controller!.command(sessionId, "rename", { name });
+  async rename(sessionId: string, name: string): Promise<void> {
+    const store = this.store(sessionId);
+    const previous = store.get().meta?.name ?? null;
+    store.set((state) => ({ meta: { ...(state.meta ?? {}), name } }));
+    try {
+      const ack = (await this.controller!.command(sessionId, "rename", { name })) as
+        | { accepted?: boolean; error?: string }
+        | undefined;
+      if (ack && ack.accepted === false) throw new Error(ack.error ?? "rename failed");
+    } catch (error) {
+      store.set((state) => ({ meta: { ...(state.meta ?? {}), name: previous } }));
+      throw error;
+    }
   }
 
   #applyFull(sessionId: string, entries: unknown[], status?: SessionStatus, meta?: SessionMeta, epoch?: number): void {

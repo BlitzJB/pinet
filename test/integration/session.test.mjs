@@ -211,6 +211,23 @@ describe("authenticated session + end-to-end commands", () => {
     controller.close();
   });
 
+  it("persists host meta updates in the catalog (rename)", async () => {
+    const host = makeHost();
+    await host.bridge.connect();
+    host.bridge.openSession({ sessionId: SESSION, meta: { name: "demo", cwd: "/srv", host: "studio" } });
+    const controller = await makeController("renamer");
+    await controller.attach(SESSION, "control");
+    await controller.list();
+
+    host.bridge.publishMeta({ name: "Fix the login flow", cwd: "/srv", host: "studio" });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const sessions = await controller.list();
+    expect(sessions.find((s) => s.sessionId === SESSION)?.meta?.name).toBe("Fix the login flow");
+    controller.close();
+    host.bridge.close();
+  });
+
   it("rejects a command from an unattached controller", async () => {
     const host = makeHost();
     await host.bridge.connect();

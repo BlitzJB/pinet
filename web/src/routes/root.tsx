@@ -1,12 +1,117 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { MenuIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 import { getMe, loginUrl } from "../lib/api";
 import { PinetProvider } from "../lib/context";
 import { SessionSidebar } from "../components/SessionSidebar";
-import { InstallButton } from "../components/InstallButton";
-import { ghostButton } from "../components/ui/surfaces";
+import { cn } from "../lib/utils";
+
+const DRAWER_WIDTH = 288;
+// Android's gesture navigation reserves a strip along each edge for the system
+// back gesture and there is no web API to opt out (that needs a native shell's
+// `setSystemGestureExclusionRects`). We do everything a PWA can:
+//   - treat the drawer edge as our own: non-passive touchmove + preventDefault
+//   - kill Chrome's horizontal swipe-to-navigate (overscroll-behavior-x in css)
+//   - keep a tap target on the edge so the drawer is reachable without a swipe
+// A back gesture that does reach the OS will still navigate, so the drawer is a
+// progressive enhancement over the tap handle.
+function useEdgeSwipeDrawer() {
+  const [open, setOpen] = useState(false);
+  const [offset, setOffset] = useState<number | null>(null); // 0 = open, -100 = closed
+  const offsetRef = useRef<number | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  const gesture = useRef<{ x: number; y: number; mode: "open" | "close"; committed: boolean } | null>(null);
+
+  const updateOffset = (value: number | null) => {
+    offsetRef.current = value;
+    setOffset(value);
+  };
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const onStart = (event: TouchEvent) => {
+      if (window.innerWidth >= 768 || event.touches.length !== 1) {
+        gesture.current = null;
+        return;
+      }
+      const touch = event.touches[0];
+      const fromEdge = touch.clientX <= 32;
+      if (open) gesture.current = { x: touch.clientX, y: touch.clientY, mode: "close", committed: false };
+      else if (fromEdge) gesture.current = { x: touch.clientX, y: touch.clientY, mode: "open", committed: false };
+      else gesture.current = null;
+    };
+
+    const onMove = (event: TouchEvent) => {
+      const active = gesture.current;
+      if (!active) return;
+      const touch = event.touches[0];
+      const dx = touch.clientX - active.x;
+      const dy = touch.clientY - active.y;
+      if (!active.committed) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        if (Math.abs(dy) > Math.abs(dx)) {
+          gesture.current = null;
+          return;
+        }
+        active.committed = true;
+      }
+      // Claim the gesture from the browser/system before it becomes a back swipe.
+      event.preventDefault();
+      const progress =
+        active.mode === "open"
+          ? Math.min(1, Math.max(0, dx / DRAWER_WIDTH))
+          : Math.min(1, Math.max(0, -dx / DRAWER_WIDTH));
+      updateOffset(-100 * (active.mode === "open" ? 1 - progress : progress));
+    };
+
+    const onEnd = () => {
+      const active = gesture.current;
+      gesture.current = null;
+      if (!active || !active.committed) {
+        updateOffset(null);
+        return;
+      }
+      setOpen((offsetRef.current ?? (open ? 0 : -100)) > -50);
+      updateOffset(null);
+    };
+
+    element.addEventListener("touchstart", onStart, { passive: true });
+    element.addEventListener("touchmove", onMove, { passive: false });
+    element.addEventListener("touchend", onEnd, { passive: true });
+    element.addEventListener("touchcancel", onEnd, { passive: true });
+    return () => {
+      element.removeEventListener("touchstart", onStart);
+      element.removeEventListener("touchmove", onMove);
+      element.removeEventListener("touchend", onEnd);
+      element.removeEventListener("touchcancel", onEnd);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    // A system back gesture (hardware button or an OS edge swipe we could not
+    // claim) while the drawer is open should close it, not navigate. A sentinel
+    // history entry + popstate gives us that.
+    try {
+      history.pushState({ __pinetDrawer: true }, "");
+    } catch {
+      /* ignore */
+    }
+    const onPop = () => setOpen(false);
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      // Only consume the sentinel if we are still on it; a route change (tapping
+      // a session) replaces the entry, in which case leave it alone.
+      if ((history.state as { __pinetDrawer?: boolean } | null)?.__pinetDrawer) history.back();
+    };
+  }, [open]);
+
+  return { open, setOpen, offset, ref };
+}
 
 function Splash() {
   return (
@@ -36,39 +141,53 @@ function Login() {
   );
 }
 
-function AppShell({ email }: { email: string }) {
-  const [drawer, setDrawer] = useState(false);
+function AppShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const activeSessionId = pathname.match(/\/s\/([^/]+)/)?.[1];
+  const swipe = useEdgeSwipeDrawer();
+  const offset = swipe.offset ?? (swipe.open ? 0 : -100);
+  const dragging = swipe.offset !== null;
 
   return (
-    <div className="flex h-full">
+    <div ref={swipe.ref} className="flex h-full">
       <div className="hidden md:flex">
         <SessionSidebar activeSessionId={activeSessionId} />
       </div>
 
-      {drawer && (
-        <div className="fixed inset-0 z-40 flex md:hidden">
-          <div className="fade-in animate-in duration-200 motion-reduce:animate-none">
-            <SessionSidebar activeSessionId={activeSessionId} onNavigate={() => setDrawer(false)} />
-          </div>
-          <button type="button" aria-label="Close menu" onClick={() => setDrawer(false)} className="fade-in animate-in flex-1 bg-black/40 backdrop-blur-sm duration-200" />
+      <div className={cn("fixed inset-0 z-40 md:hidden", !swipe.open && !dragging && "pointer-events-none")}>
+        <button
+          type="button"
+          aria-label="Close sessions"
+          tabIndex={swipe.open ? 0 : -1}
+          onClick={() => swipe.setOpen(false)}
+          style={{ opacity: Math.max(0, 1 + offset / 100) }}
+          className={cn("absolute inset-0 bg-black/40 backdrop-blur-sm", !dragging && "transition-opacity duration-300")}
+        />
+        <div
+          style={{ transform: `translateX(${offset}%)` }}
+          className={cn(
+            "absolute inset-y-0 start-0 pt-[env(safe-area-inset-top)]",
+            !dragging && "transition-transform duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+          )}
+        >
+          <SessionSidebar activeSessionId={activeSessionId} onNavigate={() => swipe.setOpen(false)} />
         </div>
+      </div>
+
+      {!swipe.open && (
+        <button
+          type="button"
+          aria-label="Open sessions"
+          onClick={() => swipe.setOpen(true)}
+          className="fixed start-0 top-1/2 z-30 flex h-12 w-4 -translate-y-1/2 items-center justify-center rounded-e-full bg-foreground/10 text-foreground/40 backdrop-blur transition-colors hover:bg-foreground/20 md:hidden"
+        >
+          <ChevronRightIcon className="size-3.5" />
+        </button>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2 md:hidden">
-          <button type="button" aria-label="Open menu" onClick={() => setDrawer(true)} className={ghostButton + " size-8"}>
-            <MenuIcon className="size-4" />
-          </button>
-          <span className="text-sm font-semibold">Pinet</span>
-          <InstallButton className="ms-auto" />
-          <span className="truncate text-[11px] text-muted-foreground">{email}</span>
-        </div>
-        <main className="min-h-0 flex-1">
-          <Outlet />
-        </main>
-      </div>
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col pt-[env(safe-area-inset-top)]">
+        <Outlet />
+      </main>
     </div>
   );
 }
@@ -79,7 +198,7 @@ export function Root() {
   if (me.isError || !me.data) return <Login />;
   return (
     <PinetProvider>
-      <AppShell email={me.data.email} />
+      <AppShell />
     </PinetProvider>
   );
 }
