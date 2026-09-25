@@ -33,7 +33,7 @@ function CopyAction({ text, label = "Copy" }: { text: string; label?: string }) 
 
 type GroupKind = "user" | "assistant" | "system" | "compaction";
 
-interface Group {
+export interface Group {
   key: string;
   kind: GroupKind;
   entries: DisplayEntry[];
@@ -121,31 +121,22 @@ const AssistantTurn = memo(function AssistantTurn({ group, running }: { group: G
 });
 
 /**
- * The transcript. Memoised on `entries` so status/outbox updates (which keep the
- * same array reference) don't re-render every message in a long thread.
+ * One transcript group, rendered as a virtualized row. Memoised so a row only
+ * re-renders when its own group or running state changes.
  */
-export const ThreadMessages = memo(function ThreadMessages({ entries, running }: { entries: DisplayEntry[]; running: boolean }) {
-  const groups = useMemo(() => groupEntries(entries), [entries]);
-  if (groups.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-8">
-      {groups.map((group, index) => {
-        const isLast = index === groups.length - 1;
-        if (group.kind === "user") return <UserMessage key={group.key} entry={group.entries[0]} />;
-        if (group.kind === "compaction") return <CompactionNotice key={group.key} entry={group.entries[0]} />;
-        if (group.kind === "system") {
-          return (
-            <div key={group.key} className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-              <span className="h-px flex-1 bg-border/60" />
-              <span className="min-w-0 text-center [overflow-wrap:anywhere]">
-                [{group.entries[0].title ?? "system"}] {group.entries[0].body}
-              </span>
-              <span className="h-px flex-1 bg-border/60" />
-            </div>
-          );
-        }
-        return <AssistantTurn key={group.key} group={group} running={running && isLast} />;
-      })}
-    </div>
-  );
+export const MessageGroup = memo(function MessageGroup({ group, running }: { group: Group; running: boolean }) {
+  if (group.kind === "user") return <UserMessage entry={group.entries[0]} />;
+  if (group.kind === "compaction") return <CompactionNotice entry={group.entries[0]} />;
+  if (group.kind === "system") {
+    return (
+      <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+        <span className="h-px flex-1 bg-border/60" />
+        <span className="min-w-0 text-center [overflow-wrap:anywhere]">
+          [{group.entries[0].title ?? "system"}] {group.entries[0].body}
+        </span>
+        <span className="h-px flex-1 bg-border/60" />
+      </div>
+    );
+  }
+  return <AssistantTurn group={group} running={running} />;
 });

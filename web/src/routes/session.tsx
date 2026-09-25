@@ -3,5 +3,5 @@ import { ThreadView } from "../components/thread/ThreadView";
 
 export function SessionPage() {
   const { sessionId } = useParams({ from: "/s/$sessionId" });
-  return <ThreadView sessionId={sessionId} />;
+  return <ThreadView key={sessionId} sessionId={sessionId} />;
 }
