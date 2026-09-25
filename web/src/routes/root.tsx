@@ -102,25 +102,12 @@ function useEdgeSwipeDrawer() {
     };
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    // A system back gesture (hardware button or an OS edge swipe we could not
-    // claim) while the drawer is open should close it, not navigate. A sentinel
-    // history entry + popstate gives us that.
-    try {
-      history.pushState({ __pinetDrawer: true }, "");
-    } catch {
-      /* ignore */
-    }
-    const onPop = () => setOpen(false);
-    window.addEventListener("popstate", onPop);
-    return () => {
-      window.removeEventListener("popstate", onPop);
-      // Only consume the sentinel if we are still on it; a route change (tapping
-      // a session) replaces the entry, in which case leave it alone.
-      if ((history.state as { __pinetDrawer?: boolean } | null)?.__pinetDrawer) history.back();
-    };
-  }, [open]);
+  // NOTE: this drawer deliberately does *not* push a history entry. An earlier
+  // version pushed a sentinel on open and called history.back() on close so a
+  // system back gesture would close it instead of navigating. That raced with
+  // the router: tapping a link closed the drawer and back() then undid the
+  // navigation, so sessions appeared not to open. Overlays are closed by the
+  // scrim or a drag; the back gesture keeps its normal browser meaning.
 
   return { open, setOpen, offset, ref };
 }
