@@ -48,6 +48,11 @@ export default function pinet(pi: Pi): void {
   const hubUrl = process.env.PINET_HUB ?? "ws://127.0.0.1:8787/ws";
   const httpUrl = process.env.PINET_HTTP ?? deriveHttp(hubUrl);
   const enrollCode = process.env.PINET_ENROLL_CODE;
+  // pi-subagents marks child processes with PI_SUBAGENT_CHILD=1. A child is part
+  // of a parent's run, not an independent host: connecting would register a
+  // throwaway session per child (sidebar noise, extra host connection, extra
+  // key wraps). Children are surfaced through the parent instead.
+  const isSubagentChild = process.env.PI_SUBAGENT_CHILD === "1";
 
   let bridge: HostBridge | undefined;
   let activeCtx: ExtensionContext | undefined;
@@ -366,6 +371,11 @@ export default function pinet(pi: Pi): void {
   }
 
   async function autoStart(): Promise<void> {
+    if (isSubagentChild) {
+      // Deliberately inert: see the PI_SUBAGENT_CHILD note above.
+      trace("subagent child: pinet host disabled");
+      return;
+    }
     trace("autoStart");
     try {
       const state = loadHostState(dir);
@@ -405,6 +415,7 @@ export default function pinet(pi: Pi): void {
           `connected: ${Boolean(bridge?.socket?.ready)}`,
           `host: ${state.hostId ?? "(not enrolled)"}`,
           `session: ${sessionId ?? "(none)"}`,
+          ...(isSubagentChild ? ["subagent child: pinet host disabled for this process"] : []),
         ];
         notify(ctx, lines.join("\n"), state.hostId ? "info" : "warning");
         return;

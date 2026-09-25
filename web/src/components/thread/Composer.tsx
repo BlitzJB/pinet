@@ -35,7 +35,7 @@ export function Composer({
   contextUsage?: { tokens?: number | null; contextWindow?: number; percent?: number | null } | null;
   compacting?: boolean;
   onModel?: (provider: string, modelId: string, name: string) => void;
-  loadModels?: () => Promise<ModelInfo[]>;
+  loadModels?: (options?: { refresh?: boolean }) => Promise<ModelInfo[]>;
   onSend: (text: string) => void | Promise<void>;
   onStop: () => void;
   onCompact: () => void;

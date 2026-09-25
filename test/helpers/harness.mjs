@@ -1,9 +1,10 @@
 import { createServer } from "node:http";
 import { AccountStore } from "../../src/auth/accounts.mjs";
+import { Registry } from "../../src/coordinator/registry.mjs";
 import { createGateway } from "../../src/coordinator/ws.mjs";
 import { generateEd25519, generateX25519 } from "../../src/crypto/keys.mjs";
 
-export async function startCoordinator({ verifySession } = {}) {
+export async function startCoordinator({ verifySession, registry = new Registry() } = {}) {
   const accounts = new AccountStore();
   const server = createServer((_req, res) => {
     res.writeHead(404);
@@ -11,7 +12,7 @@ export async function startCoordinator({ verifySession } = {}) {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
-  const gateway = createGateway({ server, accounts, serverId: "srv_test", verifySession });
+  const gateway = createGateway({ server, accounts, serverId: "srv_test", verifySession, registry });
   return {
     accounts,
     server,
@@ -19,6 +20,7 @@ export async function startCoordinator({ verifySession } = {}) {
     serverId: "srv_test",
     url: `ws://127.0.0.1:${port}/ws`,
     gateway,
+    registry,
     close: async () => {
       await gateway.close();
       server.closeAllConnections?.();

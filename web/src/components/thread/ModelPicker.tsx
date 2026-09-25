@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, ChevronDownIcon, CpuIcon, SearchIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, CpuIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ModelInfo } from "../../lib/pinet";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ghostButton } from "../ui/surfaces";
 
-/** Model catalogue picker. The list is fetched on first open and cached by the connection. */
+const FRESH_MS = 60_000;
+
+/**
+ * Model catalogue picker. The list is acked by the host (it needs the host's
+ * provider credentials), so it is cached briefly and refetched on open when
+ * stale, with an explicit refresh for when credentials changed on the host.
+ */
 export function ModelPicker({
   model,
   disabled,
@@ -14,7 +20,7 @@ export function ModelPicker({
 }: {
   model?: { provider: string; id: string; name?: string } | null;
   disabled?: boolean;
-  load: () => Promise<ModelInfo[]>;
+  load: (options?: { refresh?: boolean }) => Promise<ModelInfo[]>;
   onSelect: (provider: string, modelId: string, name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -22,17 +28,19 @@ export function ModelPicker({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const fetchedAt = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
   }, [open]);
 
-  async function fetchModels() {
+  async function fetchModels(refresh = false) {
     setLoading(true);
     setError(null);
     try {
-      setModels(await load());
+      setModels(await load(refresh ? { refresh: true } : undefined));
+      fetchedAt.current = Date.now();
     } catch (cause) {
       setError(String((cause as Error)?.message ?? cause));
     } finally {
@@ -43,7 +51,7 @@ export function ModelPicker({
   function toggle() {
     const next = !open;
     setOpen(next);
-    if (next && models === null && !loading) void fetchModels();
+    if (next && !loading && (models === null || Date.now() - fetchedAt.current > FRESH_MS)) void fetchModels();
   }
 
   const groups = useMemo(() => {
@@ -90,12 +98,22 @@ export function ModelPicker({
             placeholder="Search models"
             className="w-full bg-transparent text-[12.5px] outline-none placeholder:text-muted-foreground"
           />
+          <button
+            type="button"
+            aria-label="Refresh models"
+            title="Refresh models"
+            tabIndex={open ? 0 : -1}
+            onClick={() => void fetchModels(true)}
+            className="grid size-5 shrink-0 place-items-center rounded-md text-muted-foreground/60 transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
+          >
+            <RefreshCwIcon className={cn("size-3", loading && "animate-spin motion-reduce:animate-none")} />
+          </button>
         </div>
         <div className="max-h-72 overflow-y-auto p-1.5">
-          {loading && <p className="px-2 py-3 text-[12px] text-muted-foreground">Loading models…</p>}
+          {models === null && loading && <p className="px-2 py-3 text-[12px] text-muted-foreground">Loading models…</p>}
           {error && <p className="px-2 py-3 text-[12px] text-destructive">{error}</p>}
-          {!loading && !error && groups.length === 0 && (
-            <p className="px-2 py-3 text-[12px] text-muted-foreground">{models === null ? "—" : "No matching models."}</p>
+          {!error && groups.length === 0 && models !== null && (
+            <p className="px-2 py-3 text-[12px] text-muted-foreground">No matching models.</p>
           )}
           {groups.map(([providerName, items]) => (
             <div key={providerName}>

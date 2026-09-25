@@ -117,7 +117,7 @@ describe("host extension delta streaming", () => {
     controller.close();
   });
 
-  async function enrollHostTest(name) {
+  async function enrollHostTest(name, { waitForSession = true } = {}) {
     const enrolled = enrollDevice(coord.accounts, account.id, "host", name);
     writeFileSync(
       join(dir, "host.json"),
@@ -133,9 +133,11 @@ describe("host extension delta streaming", () => {
     const ctl = enrollDevice(coord.accounts, account.id, "controller", `${name}-ctl`);
     const controller = new PinetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
     await controller.connect();
-    for (let i = 0; i < 120; i += 1) {
-      if ((await controller.list()).some((session) => session.sessionId === SESSION)) break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    if (waitForSession) {
+      for (let i = 0; i < 120; i += 1) {
+        if ((await controller.list()).some((session) => session.sessionId === SESSION)) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
     }
     return controller;
   }
@@ -171,5 +173,20 @@ describe("host extension delta streaming", () => {
     const ack = await controller.command(SESSION, "spawn", {});
     expect(ack).toMatchObject({ accepted: false, error: "spawn_disabled" });
     controller.close();
+  });
+
+  it("stays inert inside a subagent child process", async () => {
+    // pi-subagents marks children with PI_SUBAGENT_CHILD=1. A child is part of a
+    // parent's run, so pinet must not open its own host connection or session.
+    process.env.PI_SUBAGENT_CHILD = "1";
+    try {
+      const controller = await enrollHostTest("child", { waitForSession: false });
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      expect(coord.registry.stats().hosts).toBe(0);
+      expect(await controller.list()).toEqual([]);
+      controller.close();
+    } finally {
+      delete process.env.PI_SUBAGENT_CHILD;
+    }
   });
 });

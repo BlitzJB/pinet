@@ -66,7 +66,7 @@ export interface ModelInfo {
   contextWindow?: number | null;
 }
 
-const MODEL_CACHE_MS = 5 * 60_000;
+const MODEL_CACHE_MS = 60_000;
 
 export type ConnStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 export interface ConnState {
