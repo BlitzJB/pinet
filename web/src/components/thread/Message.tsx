@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { CheckIcon, ChevronDownIcon, CopyIcon, Minimize2Icon } from "lucide-react";
 import { cn, formatTokens } from "../../lib/utils";
 import type { DisplayEntry } from "../../lib/pinet";
@@ -56,7 +56,7 @@ export function groupEntries(entries: DisplayEntry[]): Group[] {
   return groups;
 }
 
-function UserMessage({ entry }: { entry: DisplayEntry }) {
+const UserMessage = memo(function UserMessage({ entry }: { entry: DisplayEntry }) {
   return (
     <div className="group flex flex-col items-end gap-1">
       <div className="max-w-[85%] min-w-0 rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-foreground">
@@ -67,9 +67,9 @@ function UserMessage({ entry }: { entry: DisplayEntry }) {
       </div>
     </div>
   );
-}
+});
 
-function CompactionNotice({ entry }: { entry: DisplayEntry }) {
+const CompactionNotice = memo(function CompactionNotice({ entry }: { entry: DisplayEntry }) {
   const [open, setOpen] = useState(false);
   const tokens = entry.tokensBefore ? formatTokens(entry.tokensBefore) : null;
   return (
@@ -90,15 +90,19 @@ function CompactionNotice({ entry }: { entry: DisplayEntry }) {
       </CollapsibleContent>
     </div>
   );
-}
+});
 
-function AssistantTurn({ group, running }: { group: Group; running: boolean }) {
-  const segments = segmentAssistantTurn(group.entries);
-  const text = group.entries
-    .filter((entry) => entry.kind === "assistant")
-    .map((entry) => entry.text ?? "")
-    .join("\n\n")
-    .trim();
+const AssistantTurn = memo(function AssistantTurn({ group, running }: { group: Group; running: boolean }) {
+  const segments = useMemo(() => segmentAssistantTurn(group.entries), [group.entries]);
+  const text = useMemo(
+    () =>
+      group.entries
+        .filter((entry) => entry.kind === "assistant")
+        .map((entry) => entry.text ?? "")
+        .join("\n\n")
+        .trim(),
+    [group.entries],
+  );
 
   return (
     <div className="group flex flex-col gap-3">
@@ -114,10 +118,14 @@ function AssistantTurn({ group, running }: { group: Group; running: boolean }) {
       ) : null}
     </div>
   );
-}
+});
 
-export function ThreadMessages({ entries, running }: { entries: DisplayEntry[]; running: boolean }) {
-  const groups = groupEntries(entries);
+/**
+ * The transcript. Memoised on `entries` so status/outbox updates (which keep the
+ * same array reference) don't re-render every message in a long thread.
+ */
+export const ThreadMessages = memo(function ThreadMessages({ entries, running }: { entries: DisplayEntry[]; running: boolean }) {
+  const groups = useMemo(() => groupEntries(entries), [entries]);
   if (groups.length === 0) return null;
   return (
     <div className="flex flex-col gap-8">
@@ -140,4 +148,4 @@ export function ThreadMessages({ entries, running }: { entries: DisplayEntry[]; 
       })}
     </div>
   );
-}
+});

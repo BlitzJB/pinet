@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { ChevronDownIcon, SparklesIcon } from "lucide-react";
 import { cn, formatDuration } from "../../lib/utils";
 import { summarizeActivity, type ActivityItem } from "../../lib/segments";
@@ -24,7 +24,7 @@ function DotMatrix({ running }: { running: boolean }) {
   );
 }
 
-export function ActivityGroup({ items, running }: { items: ActivityItem[]; running: boolean }) {
+export const ActivityGroup = memo(function ActivityGroup({ items, running }: { items: ActivityItem[]; running: boolean }) {
   // Collapsed by default; the header still reports live progress.
   const [open, setOpen] = useState(false);
   const runningTool = items.find((item) => item.type === "tool" && item.running) as
@@ -70,4 +70,4 @@ export function ActivityGroup({ items, running }: { items: ActivityItem[]; runni
       </CollapsibleContent>
     </div>
   );
-}
+});

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { AlertCircleIcon, CheckIcon, ChevronDownIcon, LoaderIcon, XCircleIcon } from "lucide-react";
 import { cn, formatDuration } from "../../lib/utils";
 import { CollapsibleContent } from "../ui/collapsible";
@@ -14,7 +14,7 @@ export interface ToolCardProps {
   flat?: boolean;
 }
 
-export function ToolCard({ name, args, output, error, running, durationMs, flat }: ToolCardProps) {
+export const ToolCard = memo(function ToolCard({ name, args, output, error, running, durationMs, flat }: ToolCardProps) {
   const [open, setOpen] = useState(false);
   const status: "running" | "complete" | "error" = running ? "running" : error ? "error" : "complete";
   const StatusIcon = status === "running" ? LoaderIcon : status === "complete" ? CheckIcon : XCircleIcon;
@@ -65,4 +65,4 @@ export function ToolCard({ name, args, output, error, running, durationMs, flat 
       )}
     </div>
   );
-}
+});
