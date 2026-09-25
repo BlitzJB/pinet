@@ -203,6 +203,12 @@ export default function pinet(pi: Pi): void {
       trace("registerSession skipped", `bridge=${Boolean(bridge)} ctx=${Boolean(ctx)}`);
       return;
     }
+    // Events often arrive before the socket finishes its handshake; that is a
+    // normal "not yet", not a failure — adopt() retries on the next event.
+    if (!bridge.socket?.ready) {
+      trace("registerSession deferred", "socket not ready");
+      return;
+    }
     try {
       spawner.cwd = ctx.cwd;
       void detectGit(ctx.cwd).then((isGit) => {
