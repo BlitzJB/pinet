@@ -238,6 +238,8 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
             thinkingLevel={state.status?.thinkingLevel}
             contextUsage={state.status?.contextUsage}
             compacting={Boolean(state.status?.compacting)}
+            onModel={(provider, modelId, name) => void connection.setModel(sessionId, provider, modelId, name).catch(() => {})}
+            loadModels={() => connection.listModels(sessionId)}
             onSend={(text) => connection.prompt(sessionId, text)}
             onStop={() => void connection.abort(sessionId).catch(() => {})}
             onCompact={() => void connection.compact(sessionId).catch(() => {})}

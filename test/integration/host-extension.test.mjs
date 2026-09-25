@@ -16,7 +16,15 @@ function makeCtx(store) {
     thinkingLevel: "off",
     isIdle: () => true,
     getContextUsage: () => null,
-    modelRegistry: { find: () => undefined },
+    scopedModels: [],
+    modelRegistry: {
+      find: () => undefined,
+      getProviderDisplayName: (provider) => (provider === "test" ? "Test Provider" : provider),
+      getAvailable: () => [
+        { provider: "test", id: "m", name: "Test Model", reasoning: true, contextWindow: 200000 },
+        { provider: "other", id: "x", name: "Other Model", reasoning: false, contextWindow: 128000 },
+      ],
+    },
     abort() {},
     compact() {},
     sessionManager: {
@@ -136,6 +144,23 @@ describe("host extension delta streaming", () => {
     const controller = await enrollHostTest("cap");
     const session = (await controller.list()).find((entry) => entry.sessionId === SESSION);
     expect(session.meta.spawn).toMatchObject({ mode: "session", cwd: "/tmp" });
+    controller.close();
+  });
+
+  it("lists the models the host can run", async () => {
+    const controller = await enrollHostTest("models");
+    await controller.attach(SESSION, "control");
+    const ack = await controller.command(SESSION, "list_models", {});
+    expect(ack.accepted).toBe(true);
+    const models = ack.data.models;
+    expect(models.map((m) => `${m.provider}/${m.id}`).sort()).toEqual(["other/x", "test/m"]);
+    expect(models.find((m) => m.id === "m")).toMatchObject({
+      name: "Test Model",
+      providerName: "Test Provider",
+      reasoning: true,
+      contextWindow: 200000,
+    });
+    expect(ack.data.current).toEqual({ provider: "test", id: "m" });
     controller.close();
   });
 

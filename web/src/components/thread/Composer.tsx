@@ -1,10 +1,12 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { ArrowUpIcon, BrainIcon, ChevronDownIcon, Minimize2Icon, SquareIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
+import type { ModelInfo } from "../../lib/pinet";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
-import { ghostButton, iconSwap, iconSwapIn, iconSwapOut, mono, paper } from "../ui/surfaces";
+import { ghostButton, iconSwap, iconSwapIn, iconSwapOut, paper } from "../ui/surfaces";
 import { ContextMeter } from "./ContextMeter";
+import { ModelPicker } from "./ModelPicker";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -17,6 +19,8 @@ export function Composer({
   thinkingLevel,
   contextUsage,
   compacting,
+  onModel,
+  loadModels,
   onSend,
   onStop,
   onCompact,
@@ -30,6 +34,8 @@ export function Composer({
   thinkingLevel?: string | null;
   contextUsage?: { tokens?: number | null; contextWindow?: number; percent?: number | null } | null;
   compacting?: boolean;
+  onModel?: (provider: string, modelId: string, name: string) => void;
+  loadModels?: () => Promise<ModelInfo[]>;
   onSend: (text: string) => void | Promise<void>;
   onStop: () => void;
   onCompact: () => void;
@@ -87,13 +93,8 @@ export function Composer({
               !attached ? "bg-foreground/25" : mode === "control" ? "bg-emerald-500" : "bg-amber-400",
             )}
           />
-          {model && (
-            <span
-              className={cn(mono, "hidden max-w-[10rem] truncate rounded-full bg-foreground/[0.05] px-2 py-1 text-foreground/45 sm:inline-block")}
-              title={`${model.provider}/${model.id}`}
-            >
-              {model.id}
-            </span>
+          {onModel && loadModels && (
+            <ModelPicker model={model} disabled={disabled} load={loadModels} onSelect={onModel} />
           )}
           <div className="relative">
             <button
@@ -107,7 +108,7 @@ export function Composer({
               <span className="hidden sm:inline">{thinkingLevel ?? "thinking"}</span>
               <ChevronDownIcon className={cn("size-3 transition-transform duration-200", thinkingOpen && "rotate-180")} />
             </button>
-            <ComposerMenu open={thinkingOpen} align="start">
+            <ComposerMenu open={thinkingOpen} align="start" className="w-44 p-1.5">
               {THINKING_LEVELS.map((level) => (
                 <button
                   key={level}

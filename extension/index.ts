@@ -197,6 +197,45 @@ export default function pinet(pi: Pi): void {
         const ok = await pi.setModel(model);
         return { accepted: ok, mode: "immediate", error: ok ? null : "auth_unavailable" };
       }
+      case "list_models": {
+        // Session-scoped models when configured, otherwise everything the
+        // registry has auth for. Sent in the ack (models aren't secret).
+        const scoped = ctx.scopedModels ?? [];
+        const source = scoped.length > 0 ? scoped.map((entry: { model: never }) => entry.model) : ctx.modelRegistry.getAvailable();
+        const seen = new Set<string>();
+        const models: Json[] = [];
+        for (const model of source as unknown as { provider: string; id: string; name?: string; reasoning?: boolean; contextWindow?: number }[]) {
+          const key = `${String(model.provider)}/${String(model.id)}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          let providerName = String(model.provider);
+          try {
+            providerName = ctx.modelRegistry.getProviderDisplayName(model.provider) || providerName;
+          } catch {
+            /* display name is optional */
+          }
+          models.push({
+            provider: String(model.provider),
+            id: String(model.id),
+            name: String(model.name ?? model.id),
+            providerName,
+            reasoning: Boolean(model.reasoning),
+            contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : null,
+          });
+        }
+        models.sort(
+          (a, b) =>
+            String(a.providerName).localeCompare(String(b.providerName)) || String(a.name).localeCompare(String(b.name)),
+        );
+        return {
+          accepted: true,
+          mode: "immediate",
+          data: {
+            models,
+            current: ctx.model ? { provider: String(ctx.model.provider), id: String(ctx.model.id) } : null,
+          },
+        };
+      }
       case "set_thinking":
         pi.setThinkingLevel(String(args.level ?? "off") as never);
         return { accepted: true, mode: "immediate" };

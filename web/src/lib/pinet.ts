@@ -56,6 +56,17 @@ export interface SessionState {
   outbox: Outbox | null;
 }
 
+export interface ModelInfo {
+  provider: string;
+  id: string;
+  name: string;
+  providerName?: string;
+  reasoning?: boolean;
+  contextWindow?: number | null;
+}
+
+const MODEL_CACHE_MS = 5 * 60_000;
+
 export type ConnStatus = "idle" | "connecting" | "connected" | "reconnecting" | "error";
 export interface ConnState {
   status: ConnStatus;
@@ -76,6 +87,7 @@ export class PinetConnection {
   readonly conn = new Store<ConnState>({ status: "idle" });
   private controller?: PinetController;
   private stores = new Map<string, Store<SessionState>>();
+  private modelCache = new Map<string, { at: number; models: ModelInfo[] }>();
   private connecting?: Promise<void>;
 
   store(sessionId: string): Store<SessionState> {
@@ -246,8 +258,37 @@ export class PinetConnection {
   compact(sessionId: string, instructions?: string): Promise<unknown> {
     return this.controller!.command(sessionId, "compact", instructions ? { instructions } : {});
   }
-  setModel(sessionId: string, provider: string, modelId: string): Promise<unknown> {
-    return this.controller!.command(sessionId, "set_model", { provider, modelId });
+  /** Model catalogue the host offers, cached briefly (it is acked, not streamed). */
+  async listModels(sessionId: string, { refresh = false }: { refresh?: boolean } = {}): Promise<ModelInfo[]> {
+    if (!this.controller) throw new Error("not connected");
+    const cached = this.modelCache.get(sessionId);
+    if (!refresh && cached && Date.now() - cached.at < MODEL_CACHE_MS) return cached.models;
+    const ack = (await this.controller.command(sessionId, "list_models", {})) as
+      | { accepted?: boolean; error?: string; data?: { models?: ModelInfo[] } }
+      | undefined;
+    if (ack?.accepted === false) throw new Error(ack.error ?? "list_models failed");
+    const models = ack?.data?.models ?? [];
+    this.modelCache.set(sessionId, { at: Date.now(), models });
+    return models;
+  }
+
+  /** Optimistic so the chip updates immediately; the host confirms via status. */
+  async setModel(sessionId: string, provider: string, modelId: string, name?: string): Promise<void> {
+    if (!this.controller) throw new Error("not connected");
+    const store = this.store(sessionId);
+    const previous = store.get().status?.model ?? null;
+    store.set((state) =>
+      state.status ? { status: { ...state.status, model: { provider, id: modelId, name: name ?? modelId } } } : state,
+    );
+    try {
+      const ack = (await this.controller.command(sessionId, "set_model", { provider, modelId })) as
+        | { accepted?: boolean; error?: string }
+        | undefined;
+      if (ack && ack.accepted === false) throw new Error(ack.error ?? "set_model failed");
+    } catch (error) {
+      store.set((state) => (state.status ? { status: { ...state.status, model: previous } } : state));
+      throw error;
+    }
   }
   setThinking(sessionId: string, level: string): Promise<unknown> {
     return this.controller!.command(sessionId, "set_thinking", { level });
