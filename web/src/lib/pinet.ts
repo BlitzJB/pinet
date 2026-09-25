@@ -277,12 +277,15 @@ export class PinetConnection {
       mapped.push(record);
     }
     const store = this.store(sessionId);
+    // A full snapshot is exactly what a refetch was waiting for, so it is the
+    // authoritative place to clear `syncing` (deltas must not touch it).
     store.set((state) => ({
       entries: mapped,
       status: status ?? state.status,
       meta: meta ?? state.meta,
       epoch: epoch ?? state.epoch,
       attached: true,
+      syncing: false,
     }));
   }
 
@@ -304,6 +307,6 @@ export class PinetConnection {
       }
       mapped.push(record);
     }
-    store.set({ entries: mapped, pendingEchoes: pending, syncing: false, epoch: epoch ?? state.epoch });
+    store.set({ entries: mapped, pendingEchoes: pending, epoch: epoch ?? state.epoch });
   }
 }
