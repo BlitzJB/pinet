@@ -155,7 +155,14 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
           return;
         }
         broadcastCatalog(auth.accountId);
-        console.log(`[hub] session.opened ${session.sessionId} by ${auth.deviceId}`, registry.stats());
+        // meta.host is the live hostname from the extension (the device name is
+        // only what was recorded at enrollment), which distinguishes machines
+        // that share a host identity.
+        const live = data?.meta ?? {};
+        console.log(
+          `[hub] session.opened ${session.sessionId} by ${auth.deviceId} host=${live.host ?? "?"} cwd=${live.cwd ?? "?"}`,
+          registry.stats(),
+        );
         // A host process that restarted has no memory of current attachments, so
         // re-send host.attach for each one; the host wraps the new group key and
         // pushes a fresh snapshot, letting controllers recover without re-attaching.
