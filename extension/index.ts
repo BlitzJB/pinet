@@ -330,6 +330,9 @@ export default function pinet(pi: Pi): void {
       hostName: hostname(),
       agent: { name: "pi", version: "unknown" },
     });
+    // Publish the bridge immediately: a slow handshake must not leave the
+    // extension bridgeless, or nothing would ever register the session.
+    bridge = hostBridge;
     hostBridge.onCommand((command) => queue.run(() => handleCommand(command)));
     hostBridge.on("disconnected", () => {
       pi.events.emit("pinet:status", { connected: false, reason: "disconnected" });
@@ -341,13 +344,18 @@ export default function pinet(pi: Pi): void {
     hostBridge.on("closed", () => {
       pi.events.emit("pinet:status", { connected: false, reason: "closed" });
     });
-    await hostBridge.connect();
+    try {
+      await hostBridge.connect();
+    } catch (error) {
+      // Keep the bridge: the socket retries and registration self-heals via adopt().
+      reportError("connectBridge", error);
+      return;
+    }
     trace("bridge connected", `activeCtx=${Boolean(activeCtx)} sessionId=${sessionId ?? "-"}`);
     // Server-side error frames (rejected sessions, internal errors) are otherwise
     // dropped silently by the socket client.
     hostBridge.socket?.on("error", (data: unknown) => reportError("hub", JSON.stringify(data)));
     hostBridge.on("reconnecting", (info: { delayMs: number }) => pi.events.emit("pinet:status", { connected: false, reason: `reconnecting in ${Math.round(info.delayMs / 1000)}s` }));
-    bridge = hostBridge;
     if (activeCtx && !sessionId) registerSession(activeCtx);
   }
 

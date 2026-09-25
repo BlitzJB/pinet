@@ -43,9 +43,19 @@ export class HostBridge extends EventEmitter {
     socket.on("cmd.deliver", (data) => void this.#onCommand(data));
     socket.on("disconnected", () => this.emit("disconnected"));
     socket.on("reconnecting", (info) => this.emit("reconnecting", info));
-    socket.on("reconnected", () => this.#onReconnected());
+    // Every successful (re)connect, including the first one — a busy host can
+    // miss the initial handshake deadline, and the socket keeps retrying.
+    // (The socket emits "ready" on every connect, so this must be the only hook
+    // or a reconnect would rotate the epoch twice.)
+    socket.on("ready", () => this.#onReconnected());
     socket.on("closed", () => this.emit("closed"));
-    return socket.connect({ role: "host", deviceId: this.deviceId, identityPrivateKey: this.identity.privateKey });
+    // Keying and a 5.6MB session can block startup past the 10s default.
+    return socket.connect({
+      role: "host",
+      deviceId: this.deviceId,
+      identityPrivateKey: this.identity.privateKey,
+      timeoutMs: 30_000,
+    });
   }
 
   // On network reconnect the host rotates the session epoch and group key,
