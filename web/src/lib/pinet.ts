@@ -2,6 +2,7 @@ import { PinetController } from "../../../src/controller/client.mjs";
 import { describeEntry } from "../../../src/controller/portal.mjs";
 import { webCryptoProvider } from "../../../src/crypto/webcrypto.mjs";
 import type { ServerSession, SpawnCapability } from "./api";
+import { getMe } from "./api";
 import { ensureDevice, loadDevice, clearDevice, type StoredDevice } from "./device";
 import type { Outbox } from "./run-state";
 import { Store } from "./store";
@@ -147,7 +148,10 @@ export class PinetConnection {
   }
 
   async #connectWithDevice(): Promise<StoredDevice> {
-    const device = await ensureDevice();
+    // The browser's controller key is per-origin, so make sure it belongs to the
+    // account this session is signed in to before using it.
+    const me = await getMe().catch(() => null);
+    const device = await ensureDevice(me?.accountId);
     const controller = new PinetController({
       url: wsUrl(),
       deviceId: device.deviceId,

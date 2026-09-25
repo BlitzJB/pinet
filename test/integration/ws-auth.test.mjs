@@ -110,3 +110,41 @@ describe("WebSocket device authentication", () => {
     second.close();
   });
 });
+
+describe("browser session vs controller device account", () => {
+  it("rejects a connection whose cookie belongs to a different account", async () => {
+    const coord2 = await startCoordinator({
+      verifySession: (token) => (token.startsWith("tok:") ? { accountId: token.slice(4) } : null),
+    });
+    try {
+      const owner = makeAccount(coord2.accounts, "owner@example.com");
+      const other = makeAccount(coord2.accounts, "other@example.com");
+      const { device, identity } = enrollDevice(coord2.accounts, owner.id, "controller", "browser");
+      const socket = new PinetSocket(coord2.url);
+      await expect(
+        socket.connect({
+          role: "controller",
+          deviceId: device.id,
+          identityPrivateKey: identity.privateKey,
+          timeoutMs: 3000,
+          headers: { cookie: `pinet_session=tok:${other.id}` },
+        }),
+      ).rejects.toThrow();
+      socket.close();
+
+      // Same device, cookie for the account it belongs to: accepted.
+      const ok = new PinetSocket(coord2.url);
+      const auth = await ok.connect({
+        role: "controller",
+        deviceId: device.id,
+        identityPrivateKey: identity.privateKey,
+        timeoutMs: 3000,
+        headers: { cookie: `pinet_session=tok:${owner.id}` },
+      });
+      expect(auth).toMatchObject({ deviceId: device.id, accountId: owner.id });
+      ok.close();
+    } finally {
+      await coord2.close();
+    }
+  });
+});

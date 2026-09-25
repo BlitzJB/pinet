@@ -61,7 +61,10 @@ export class PinetSocket extends Emitter {
   #establish() {
     const provider = this.crypto;
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.url);
+      // Node clients may pass upgrade headers (tests, CLI); browsers cannot set
+      // headers, and never pass them, so this stays a plain constructor there.
+      const upgradeHeaders = this.params?.headers;
+      const ws = upgradeHeaders ? new WebSocket(this.url, { headers: upgradeHeaders }) : new WebSocket(this.url);
       this.ws = ws;
       this.lastActivity = Date.now();
       let settled = false;

@@ -11,6 +11,8 @@ export interface StoredDevice {
   identity: KeyPair;
   encryption: KeyPair;
   fingerprint?: string;
+  /** Account this controller key was enrolled for; the key is per-origin, not per-account. */
+  accountId?: string;
 }
 
 const DB_NAME = "pinet";
@@ -70,10 +72,19 @@ function deviceName(): string {
   return "web";
 }
 
-/** Load this browser's controller identity, registering one on first use. */
-export async function ensureDevice(): Promise<StoredDevice> {
+/**
+ * Load this browser's controller identity, registering one on first use.
+ *
+ * The key is stored per-origin (IndexedDB has no notion of the signed-in
+ * account), so when `accountId` is known and does not match the stored device,
+ * the stale key is discarded and a fresh device is enrolled. Otherwise a browser
+ * signed in to account B would keep talking to the coordinator as account A's
+ * device and show the wrong account's hosts and sessions.
+ */
+export async function ensureDevice(accountId?: string): Promise<StoredDevice> {
   const existing = await loadDevice();
-  if (existing) return existing;
+  if (existing && (!accountId || existing.accountId === accountId)) return existing;
+  if (existing) await clearDevice();
 
   const identity = await webCryptoProvider.generateIdentityKeypair();
   const encryption = await webCryptoProvider.generateEncryptionKeypair();
@@ -81,7 +92,7 @@ export async function ensureDevice(): Promise<StoredDevice> {
   const encPub = await webCryptoProvider.exportPublicKey(encryption.publicKey);
   const { deviceId, fingerprint } = await registerDevice({ kind: "controller", name: deviceName(), identityPub, encPub });
 
-  const device: StoredDevice = { deviceId, identity, encryption, fingerprint };
+  const device: StoredDevice = { deviceId, identity, encryption, fingerprint, accountId };
   await saveDevice(device);
   return device;
 }

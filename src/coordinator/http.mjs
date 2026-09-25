@@ -146,7 +146,7 @@ function redirect(res, location, headers = {}) {
   res.end();
 }
 
-function parseCookies(header = "") {
+export function parseCookies(header = "") {
   const out = {};
   for (const part of header.split(";")) {
     const index = part.indexOf("=");

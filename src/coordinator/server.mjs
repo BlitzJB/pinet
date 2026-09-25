@@ -58,7 +58,13 @@ export async function createCoordinator({ config = configFromEnv(), accounts, go
     "http://localhost:8787",
     "http://127.0.0.1:8787",
   ].filter(Boolean);
-  const gateway = createGateway({ server, accounts: store, serverId: config.serverId, allowedOrigins });
+  const gateway = createGateway({
+    server,
+    accounts: store,
+    serverId: config.serverId,
+    allowedOrigins,
+    verifySession: (token) => authService.verifySession(token),
+  });
   const pruneTimer = setInterval(() => {
     try {
       authService.prune();

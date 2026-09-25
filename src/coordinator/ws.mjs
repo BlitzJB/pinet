@@ -7,12 +7,24 @@ import { WebSocketServer } from "ws";
 import { canonicalJson } from "../common/canonical.mjs";
 import { newNonce } from "../common/ids.mjs";
 import { verify } from "../crypto/keys.mjs";
+import { parseCookies } from "./http.mjs";
 import { Registry } from "./registry.mjs";
 
 const CHALLENGE_TIMEOUT_MS = 15_000;
 const MAX_CLOCK_SKEW_MS = 60_000;
 const PENDING_COMMAND_TTL_MS = 5 * 60_000;
 const MAX_PENDING_COMMANDS = 10_000;
+
+function cookieAccountId(req, verifySession) {
+  if (!verifySession || !req?.headers?.cookie) return null;
+  const token = parseCookies(req.headers.cookie).pinet_session;
+  if (!token) return null;
+  try {
+    return verifySession(token)?.accountId ?? null;
+  } catch {
+    return null;
+  }
+}
 
 function send(ws, type, data = {}, route) {
   if (ws?.readyState !== 1) return;
@@ -21,7 +33,7 @@ function send(ws, type, data = {}, route) {
   ws.send(JSON.stringify(msg));
 }
 
-export function createGateway({ server, accounts, serverId, now = Date.now, registry = new Registry(), allowedOrigins = [] }) {
+export function createGateway({ server, accounts, serverId, now = Date.now, registry = new Registry(), allowedOrigins = [], verifySession }) {
   const wss = new WebSocketServer({
     server,
     path: "/ws",
@@ -43,8 +55,19 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
   pendingTimer.unref?.();
   wss.on("close", () => clearInterval(pendingTimer));
 
-  wss.on("connection", (ws) => {
-    const auth = { stage: "challenge", nonce: newNonce(), device: null, role: null, accountId: null };
+  wss.on("connection", (ws, req) => {
+    // A browser sends its session cookie on the upgrade. Pin the connection to the
+    // account the browser is *signed in* to: the controller device key lives in
+    // the browser per-origin (not per-account), so without this a device enrolled
+    // under account A would stream A's sessions while the UI shows B.
+    const auth = {
+      stage: "challenge",
+      nonce: newNonce(),
+      device: null,
+      role: null,
+      accountId: null,
+      webAccountId: cookieAccountId(req, verifySession),
+    };
     state.set(ws, auth);
     send(ws, "auth.challenge", { nonce: auth.nonce, serverId, ts: now() });
 
@@ -117,6 +140,11 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
     if (typeof signature !== "string" || !verify(payload, signature, device.identityPub)) {
       send(ws, "auth.error", { code: "bad_signature", message: "challenge signature invalid" });
       ws.close(4003, "bad signature");
+      return;
+    }
+    if (auth.webAccountId && device.accountId !== auth.webAccountId) {
+      send(ws, "auth.error", { code: "account_mismatch", message: "this browser is signed in to a different account" });
+      ws.close(4003, "account mismatch");
       return;
     }
     auth.stage = "ready";

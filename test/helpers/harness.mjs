@@ -3,7 +3,7 @@ import { AccountStore } from "../../src/auth/accounts.mjs";
 import { createGateway } from "../../src/coordinator/ws.mjs";
 import { generateEd25519, generateX25519 } from "../../src/crypto/keys.mjs";
 
-export async function startCoordinator() {
+export async function startCoordinator({ verifySession } = {}) {
   const accounts = new AccountStore();
   const server = createServer((_req, res) => {
     res.writeHead(404);
@@ -11,7 +11,7 @@ export async function startCoordinator() {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
-  const gateway = createGateway({ server, accounts, serverId: "srv_test" });
+  const gateway = createGateway({ server, accounts, serverId: "srv_test", verifySession });
   return {
     accounts,
     server,
