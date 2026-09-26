@@ -193,23 +193,141 @@ whether audio stays on your machines.
 
 ---
 
-## 4. Latency budget
+## 4. Latency budget (now measured, not estimated)
 
-| Stage | Budget | Basis |
-|---|---|---|
-| capture + VAD + endpointing | ~0 | on-device, overlaps speech |
-| audio → host | 45ms | measured one-way (India↔Europe) |
-| ASR | 150ms (target <200) | to be measured in P0 |
-| cleanup LLM | 250ms (TTFT ~120ms) | small fast model, streamed |
-| result → browser | 45ms | measured |
-| **total after release** | **~490ms** | p99 target <700ms |
+P0 spike done against Groq (key provided) on this host:
 
-With tier-1 partials the *perceived* latency is near zero; the number above is
-what it takes for the text to become *correct*.
+| Stage | Budget | **Measured** | Basis |
+|---|---|---|---|
+| capture + VAD + endpointing | ~0 | ~0 | on-device, overlaps speech |
+| audio → host | 45ms | **45ms** | one-way, from the 88ms RTT measurement |
+| ASR | <200ms | **188ms** for 15s audio (`whisper-large-v3-turbo`, RTF ~80×); 226ms for large-v3 | Groq, median of 3 |
+| cleanup LLM | <200ms | **96ms TTFT / 198ms total** (`qwen/qwen3.8-27b`) | Groq, median of 4 |
+| result → browser | 45ms | **45ms** | measured |
+| **total after release** | **<700ms p99** | **~380–470ms** | |
+
+So the 700ms p99 target is reachable with real headroom, using **one provider for
+both stages**:
+
+- **ASR:** Groq `whisper-large-v3-turbo` — $0.04/audio-hour, ~80× realtime, accepts
+  a hotword `prompt` (188ms → 202ms, i.e. biasing is nearly free).
+- **Cleanup:** Groq `qwen/qwen3.8-27b` — the fastest model measured that also
+  passed every guard (see §9.4).
+
+### 4.1 Model measurements for the cleanup pass
+
+Median of 4 streamed runs, temperature 0, cleaning a 45-word dictation; guards =
+preserved `100` / `429` / `pinet` and returned no meta-commentary:
+
+| Model | TTFT | Total | Guards | Notes |
+|---|---|---|---|---|
+| **groq `allam-2-7b`** | 73ms | **110ms** | ✗ loses "PiNet" | fastest, **unusable** — exactly what the term guard is for |
+| **groq `qwen/qwen3.8-27b`** | 96ms | **198ms** | ✓ | **the choice** |
+| groq `gpt-oss-20b` (`reasoning_effort: low`) | 357ms | 406ms | ✓ | 645ms TTFT at default effort — reasoning must be off |
+| groq `gpt-oss-120b` (`low`) | 454ms | 547ms | ✓ | |
+| deepseek `deepseek-chat` | 459ms | 614ms | ✓ | |
+| fireworks `glm-5p3-fast` | 1166ms | 1267ms | ✓ | emitted 996 chars of reasoning first |
+
+Groq's LPU is **5–10× faster** than the same class of model on Fireworks or
+DeepSeek for this workload. (Four Fireworks ids returned no parseable streaming
+content in this harness — an unresolved provider-shape issue on my side, not a
+claim that they're broken; the ones that did parse were ≥1.2s.)
+
+### 4.2 ASR hallucination is real, and it is not hypothetical
+
+Feeding Whisper a synthetic 15s tone (i.e. **no speech at all**) produced:
+
+- `whisper-large-v3` → **"Thanks for watching!"**
+- `whisper-large-v3-turbo` → **" ."**
+
+This is the classic Whisper no-speech hallucination, reproduced on our own
+endpoint. The pipeline must therefore treat a raw transcript as **untrusted
+input**, never as ground truth — which is the whole argument for §2.2's guards
+and for a no-speech / empty-transcript check *before* the LLM ever sees it.
 
 ---
 
-## 5. Phases
+## 5. Prior art: how open-source projects actually do LLM text correction
+
+Surveyed the dictation apps and libraries that implement a correction layer.
+The consistent finding is that mature projects **layer** the cleanup rather than
+throwing everything at an LLM:
+
+| Layer | What it is | Where it's done |
+|---|---|---|
+| **1. ASR-level** | filler removal, spoken punctuation, hotword biasing | provider features: Deepgram removes disfluencies by default; Voxtype's `spoken_punctuation`; Whisper's `initial_prompt` |
+| **2. Deterministic text-level** | regex/`sed` filler deletion, trailing punctuation, word replacement | Voxtype `filler_words` array + `sed`; whisper-writer's `remove_trailing_period` / `add_trailing_space` |
+| **3. LLM-level** | prompted rewrite for judgement calls | Handy, VoiceInk, Whispering, amical, Voxtype's `post_process` hook |
+
+### 5.1 Per-project notes
+
+- **Voxtype** (Rust) — most instructive. Ships a built-in `filler_words` list
+  (`uh, um, er, ah, eh, hmm, hm, mm, mhm`) applied *before* anything else, plus an
+  `[output.post_process]` hook that pipes text to an arbitrary shell command
+  (Ollama, LM Studio, `sed`, a Python script). Two things it states plainly:
+  *"Adds **2–5 seconds** latency depending on model size"* and *"For most users,
+  Whisper large-v3-turbo with Voxtype's built-in `spoken_punctuation` is
+  sufficient."* It also warns that *"LLMs interpret text literally"* — a
+  hallucination caveat in the user docs.
+- **whisper-writer** (Python) — the most-used OSS push-to-talk app. Its
+  post-processing is **entirely deterministic** (trailing period, trailing
+  space, capitalisation), with *"Simple word replacement"* and *"Using GPT for
+  instructional post-processing"* still sitting on the roadmap. The popular OSS
+  baseline is thus LLM-free.
+- **Handy** (Tauri, ~32k stars) — local Whisper plus optional LLM cleanup with
+  Ollama as a local backend, and a community thread dedicated to sharing
+  post-processing prompts (`discussions/715`).
+- **VoiceInk** (macOS) — "Power Modes" (now "Modes"): a *prompt selected by
+  context* (which app you're dictating into), plus optional AI enhancement.
+- **Whispering** — frames the product as transcribe → **transform** → paste, i.e.
+  the transform is a named, user-visible stage.
+- **amical** — a "formatting prompt" containing explicit filler lists; an issue
+  tracks that the list is English-only and omits Japanese fillers.
+- **Resonant** (closed source, documented) — the only place I found the formal
+  guard design: bad-prefix / coverage / novelty, with fallback to the raw
+  transcript.
+
+### 5.2 The patterns, distilled
+
+1. **Layer it: deterministic first, LLM last.** Every project that ships
+   something reliable does the mechanical work (filler lists, punctuation,
+   spacing) without a model, and reserves the LLM for judgement.
+2. **The prompts have converged.** Across Handy, Voxtype, amical and whisper
+   plugins the rules are the same five: remove fillers (from an explicit list),
+   fix punctuation/capitalisation, fix obvious ASR errors, preserve meaning,
+   *output only the cleaned text*. Nobody's prompt is clever — the discipline is
+   in the constraints, not the wording.
+3. **The prompt is selected by context, not hardcoded** (VoiceInk modes,
+   Resonant's email/message/general).
+4. **Filler lists are language-specific** and a known localization trap.
+5. **LLM cleanup is opt-in**, on top of a working LLM-free baseline.
+6. **Latency is the universal weak spot.** Voxtype documents 2–5s; the others call
+   a CLI or HTTP model synchronously with no streaming, no warm connection and no
+   budget. *Nobody* I surveyed optimises TTFT or p99 — that is precisely the gap
+   Wispr Flow's 700ms p99 fills (§2.1), and it is where PiNet can beat every
+   open-source option while staying local-first.
+7. **No OSS project that I surveyed implements formal anti-hallucination
+   guards.** The closest is prompt-level restraint plus documentation warnings.
+   The coverage/novelty guard design is documented only by a closed product —
+   so building it (as pure, tested functions) is genuine differentiation, not a
+   reimplementation.
+8. **Raw transcripts are untrusted** — §4.2 is our own reproduction of an ASR
+   hallucination on silence.
+
+### 5.3 What to borrow, and what to reject
+
+**Borrow:** the three-layer structure; a pluggable post-process step (Voxtype's
+hook, but with a latency budget and a hard timeout instead of an unbounded shell
+call); context/mode-specific prompts; explicit per-language filler lists; keeping
+the LLM-free baseline working and fast.
+
+**Reject:** the 2–5s synchronous CLI/HTTP call with no streaming; making the LLM
+responsible for what a regex does deterministically; and trusting a raw
+transcript as input.
+
+---
+
+## 6. Phases
 
 - **P0 — measurement spike (no product code).** Record a handful of WAVs; benchmark
   Groq vs OpenAI vs local MLX ASR, and 2–3 cleanup models, **from the host**;
@@ -229,7 +347,7 @@ Each phase ships independently with tests and a doc update.
 
 ---
 
-## 6. Security & privacy
+## 7. Security & privacy
 
 - Audio is sealed end-to-end; the coordinator sees ciphertext and a byte count.
   The opacity invariant is preserved — no coordinator-side payload inspection.
@@ -246,12 +364,12 @@ Each phase ships independently with tests and a doc update.
 
 ---
 
-## 7. Risks and open questions (decisions needed)
+## 8. Risks and open questions (decisions needed)
 
-1. **Cloud ASR key?** Groq ($0.04/hr, built for real-time) vs OpenAI (stronger on
-   noisy audio) vs none (local-only). Neither existing key (`deepseek`,
-   `fireworks`) covers ASR, and Fireworks' Whisper was **deprecated 2026-06-10**
-   (see §2.3 for the changelog quote and the live API probe).
+1. ~~**Cloud ASR key?**~~ **Resolved:** Groq, for both ASR
+   (`whisper-large-v3-turbo`) and the cleanup pass (`qwen3.8-27b`) — one key, one
+   vendor, both inside the latency budget (§4). Fireworks' Whisper was deprecated
+   2026-06-10 (§2.3), and its LLMs measured 5–10× slower here.
 2. **Install local ASR on the Macs?** whisper.cpp / parakeet-mlx (a few hundred MB)
    buys a fully private, license-free path. The VM cannot host it (no binaries,
    and no microphone near it).
@@ -269,7 +387,7 @@ Each phase ships independently with tests and a doc update.
 
 ---
 
-## 8. Testing strategy
+## 9. Testing strategy
 
 - **Guards** — adversarial fixtures: an added sentence, a dropped number, a
   meta-commentary prefix, a "naturalised" technical term, empty input. Assert
@@ -295,3 +413,14 @@ Each phase ships independently with tests and a doc update.
 - OpenAI, *Whisper prompting guide* — https://developers.openai.com/cookbook/examples/whisper_prompting_guide
 - *Local Speech To Text on M5 Max: Whisper large-v3 vs Parakeet on MLX* — https://contracollective.com/blog/local-speech-to-text-whisper-parakeet-mlx-m5-max-2026
 - Silero VAD in the browser — https://github.com/ricky0123/vad
+
+### Prior-art sources (§5)
+
+- Voxtype `CONFIGURATION.md` — https://github.com/peteonrails/voxtype/blob/main/docs/CONFIGURATION.md
+- whisper-writer — https://github.com/savbell/whisper-writer
+- Handy (and `discussions/715`, shared post-processing prompts) — https://github.com/cjpais/Handy
+- VoiceInk modes — https://github.com/beingpax/VoiceInk
+- Whispering — https://github.com/braden-w/whispering
+- amical (formatting prompt / filler lists) — https://github.com/amicalhq/amical
+- Deepgram filler-word handling — https://github.com/deepgram/recipes
+- openchamber feature request, "AI cleanup/rewrite pass for dictation transcripts (Wispr Flow-style)" — https://github.com/openchamber/openchamber/issues/2114
