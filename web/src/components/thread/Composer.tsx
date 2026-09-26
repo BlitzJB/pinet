@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUpIcon, BrainIcon, ChevronDownIcon, LoaderIcon, MicIcon, Minimize2Icon, SquareIcon, Undo2Icon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ModelInfo, VoiceResult } from "../../lib/pinet";
-import { startVoiceRecorder, MicError, micDevices, micPermissionState, voiceSupported, type MicErrorInfo, type VoiceRecorder } from "../../lib/voice";
+import { startVoiceRecorder, MicError, captureDiagnostics, micPermissionState, voiceSupported, type MicErrorInfo, type VoiceRecorder } from "../../lib/voice";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ghostButton, iconSwap, iconSwapIn, iconSwapOut, paper } from "../ui/surfaces";
@@ -64,7 +64,8 @@ export function Composer({
   const [elapsed, setElapsed] = useState(0);
   const [polishing, setPolishing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [micError, setMicError] = useState<(MicErrorInfo & { devices?: string[] }) | null>(null);
+  const [micError, setMicError] = useState<MicErrorInfo | null>(null);
+  const [diagnostics, setDiagnostics] = useState<Record<string, unknown> | null>(null);
   const [insertion, setInsertion] = useState<{ start: number; end: number; at: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recorderRef = useRef<VoiceRecorder | null>(null);
@@ -107,18 +108,25 @@ export function Composer({
       setElapsed(0);
       setRecording(true);
     } catch (error) {
-      if (error instanceof MicError) {
-        // Include the input devices so a "no microphone" report is verifiable.
-        setMicError({ ...error.info, devices: await micDevices() });
-        return;
-      }
-      setNotice(String((error as Error)?.message ?? error));
+      // Any failure at all becomes a visible, copyable report: capture used to
+      // fail silently, which is indistinguishable from the button being broken.
+      const info: MicErrorInfo =
+        error instanceof MicError
+          ? error.info
+          : {
+              message: "Could not start recording",
+              hint: "Reload the page. If it happens again, copy the diagnostics below and send them over.",
+              detail: `${(error as { name?: string })?.name ?? "Error"}: ${(error as { message?: string })?.message ?? String(error)}`,
+            };
+      setMicError(info);
+      setDiagnostics(await captureDiagnostics({ lastError: info.detail, hostVoice: voiceEnabled ? "enabled" : "not advertised by host" }));
     }
   }
 
   /** Re-read the permission state after the user has changed a browser or OS setting. */
   async function recheckMicrophone() {
     setMicError(null);
+    setDiagnostics(null);
     const permission = await micPermissionState();
     if (permission === "denied") {
       setMicError({
@@ -126,6 +134,7 @@ export function Composer({
         hint: "Click the mic icon in the address bar → Microphone → Allow, then reload the page. A reload alone does not clear a remembered block.",
         detail: `permission=${permission}`,
       });
+      setDiagnostics(await captureDiagnostics({ lastError: "permission=denied" }));
       return;
     }
     await startRecording();
@@ -311,7 +320,7 @@ export function Composer({
         </div>
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
-          {(recording || polishing || notice || insertion || micError) && (
+          {(recording || polishing || notice || insertion) && (
             <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/70" role="status" aria-live="polite">
               {recording && (
                 <span className="flex items-center gap-1.5">
@@ -327,19 +336,6 @@ export function Composer({
               )}
               {!recording && polishing && <span className="truncate">Polishing…</span>}
               {!recording && !polishing && notice && <span className="max-w-[16rem] truncate">{notice}</span>}
-              {!recording && !polishing && micError && (
-                <span className="flex min-w-0 items-center gap-1.5" title={`${micError.hint}\n\n${micError.detail}${micError.devices?.length ? `\ninputs: ${micError.devices.join(", ")}` : "\ninputs: none reported"}`}>
-                  <span className="truncate text-amber-500">{micError.message}</span>
-                  <button
-                    type="button"
-                    onClick={() => void recheckMicrophone()}
-                    className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] text-muted-foreground underline decoration-dotted transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
-                    title={micError.hint}
-                  >
-                    Recheck
-                  </button>
-                </span>
-              )}
               {!recording && !polishing && insertion && (
                 <button
                   type="button"
@@ -353,7 +349,7 @@ export function Composer({
               )}
             </span>
           )}
-          {voiceEnabled && voiceSupported() && (
+          {voiceEnabled && (
             <button
               type="button"
               aria-label={recording ? "Stop dictation" : "Dictate"}
@@ -399,6 +395,50 @@ export function Composer({
           </button>
         </div>
       </div>
+
+      {/* A capture failure is reported in full: silently doing nothing is
+          indistinguishable from a broken button. */}
+      {micError && (
+        <div className="mx-1 mb-1 rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2" role="alert">
+          <div className="flex items-start gap-2">
+            <span className="mt-[3px] size-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden />
+            <div className="min-w-0 flex-1 space-y-1">
+              <p className="text-[12.5px] text-amber-600 dark:text-amber-400">{micError.message}</p>
+              <p className="text-[12px] leading-snug text-muted-foreground">{micError.hint}</p>
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => void recheckMicrophone()}
+                  className={cn(ghostButton, "h-auto rounded-full px-2 py-0.5 text-[11.5px]")}
+                >
+                  Try again
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const text = JSON.stringify(diagnostics ?? {}, null, 2);
+                    navigator.clipboard?.writeText(text).then(
+                      () => setNotice("Diagnostics copied"),
+                      () => setNotice(null),
+                    );
+                  }}
+                  className={cn(ghostButton, "h-auto rounded-full px-2 py-0.5 text-[11.5px]")}
+                >
+                  Copy diagnostics
+                </button>
+                {!voiceSupported() && (
+                  <span className="text-[11px] text-muted-foreground/70">this browser cannot capture audio (no AudioWorklet)</span>
+                )}
+              </div>
+              {diagnostics && (
+                <pre className="mt-1 max-h-32 overflow-auto rounded-lg bg-foreground/[0.04] p-2 text-[10px] leading-tight text-muted-foreground/80">
+                  {JSON.stringify(diagnostics, null, 2)}
+                </pre>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmCompact}

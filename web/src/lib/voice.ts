@@ -11,36 +11,13 @@
 
 /** Sample rate the STT provider expects. */
 const TARGET_RATE = 16_000;
-/** How much audio to batch before handing a chunk to the caller. */
-const CHUNK_MS = 250;
-
-const WORKLET_SOURCE = `
-class PinetCapture extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.parts = [];
-    this.total = 0;
-    this.want = Math.round(sampleRate * ${CHUNK_MS} / 1000);
-  }
-  process(inputs) {
-    const channel = inputs[0] && inputs[0][0];
-    if (channel && channel.length) {
-      this.parts.push(channel.slice(0));
-      this.total += channel.length;
-      if (this.total >= this.want) {
-        const merged = new Float32Array(this.total);
-        let offset = 0;
-        for (const part of this.parts) { merged.set(part, offset); offset += part.length; }
-        this.parts = [];
-        this.total = 0;
-        this.port.postMessage(merged, [merged.buffer]);
-      }
-    }
-    return true;
-  }
-}
-registerProcessor("pinet-capture", PinetCapture);
-`;
+/**
+ * The worklet is a real same-origin file (`web/public/voice-worklet.js`), not a
+ * Blob URL. The app sends `worker-src 'self'`, which blocks blob: worklets — and
+ * that failure was silent, leaving the mic button doing nothing at all. Resolved
+ * against the app base so it works from any route (`/app/s/<id>`).
+ */
+const WORKLET_URL = `${import.meta.env.BASE_URL}voice-worklet.js`;
 
 /** Integer/linear downmix to 16 kHz, keeping phase across chunk boundaries. */
 class Resampler {
@@ -123,6 +100,25 @@ export async function micDevices(): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Everything needed to diagnose a capture failure from a bug report, without a
+ * round of guesswork. `AudioWorklet` presence is reported because a missing or
+ * blocked worklet fails *silently* by nature.
+ */
+export async function captureDiagnostics(extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  return {
+    workletUrl: WORKLET_URL,
+    audioWorkletSupported: typeof AudioContext === "undefined" ? false : "audioWorklet" in AudioContext.prototype,
+    mediaDevices: typeof navigator !== "undefined" && Boolean(navigator.mediaDevices),
+    permissionsApi: typeof navigator !== "undefined" && typeof navigator.permissions?.query === "function",
+    permission: await micPermissionState(),
+    secureContext: typeof isSecureContext === "boolean" ? isSecureContext : "unknown",
+    inputs: await micDevices(),
+    userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+    ...extra,
+  };
 }
 
 /**
@@ -216,9 +212,17 @@ export async function startVoiceRecorder({ onChunk, onError, onLevel }: Recorder
 
   const context = new AudioContext();
   const source = context.createMediaStreamSource(stream);
-  const workletUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "text/javascript" }));
-  await context.audioWorklet.addModule(workletUrl);
-  URL.revokeObjectURL(workletUrl);
+  try {
+    await context.audioWorklet.addModule(WORKLET_URL);
+  } catch (error) {
+    for (const track of stream.getTracks()) track.stop();
+    await context.close().catch(() => undefined);
+    throw new MicError({
+      message: "The audio capture module was blocked",
+      hint: `The browser refused to load ${WORKLET_URL}. If you are offline, reload; otherwise this is a content-security-policy or caching problem and the console will name it.`,
+      detail: `addModule(${WORKLET_URL}) failed: ${(error as { name?: string })?.name ?? "Error"}: ${(error as { message?: string })?.message ?? ""}`,
+    });
+  }
 
   const node = new AudioWorkletNode(context, "pinet-capture");
   // Not connected to the destination: monitoring the mic back into the speakers
