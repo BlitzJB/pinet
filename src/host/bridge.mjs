@@ -7,6 +7,7 @@ import { canonicalJson } from "../common/canonical.mjs";
 import { PiNetSocket } from "../common/ws-client.mjs";
 import { verify, sign } from "../crypto/keys.mjs";
 import { commandAad, frameAad, generateGroupKey, openJson, sealJson, wrapGroupKey } from "../crypto/e2e.mjs";
+import { MAX_CHUNK_CHARS } from "./voice.mjs";
 
 const MAX_SEEN_COMMANDS = 1000;
 
@@ -41,6 +42,7 @@ export class HostBridge extends EventEmitter {
     this.socket = socket;
     socket.on("host.attach", (data) => this.#onAttach(data));
     socket.on("cmd.deliver", (data) => void this.#onCommand(data));
+    socket.on("audio.deliver", (data) => void this.#onAudio(data));
     socket.on("disconnected", () => this.emit("disconnected"));
     socket.on("reconnecting", (info) => this.emit("reconnecting", info));
     // Every successful (re)connect, including the first one — a busy host can
@@ -140,6 +142,20 @@ export class HostBridge extends EventEmitter {
     this.#publish("session.status", { status });
   }
 
+  /**
+   * The result of one dictation: the cleaned text plus the raw transcript and
+   * any advisory flags. Goes out sealed like every other session frame, so the
+   * coordinator never sees what was said.
+   */
+  publishVoice(payload) {
+    this.#publish("session.voice", payload);
+  }
+
+  /** Subscribe to authenticated audio chunks (see #onAudio). */
+  onAudio(fn) {
+    this.on("audio", fn);
+  }
+
   publishMeta(meta) {
     this.session.meta = meta;
     // meta (name/cwd/host) is published in the clear, exactly like
@@ -205,6 +221,43 @@ export class HostBridge extends EventEmitter {
       { epoch: session.epoch, seq, enc },
       { sessionId: session.sessionId, epoch: session.epoch },
     );
+  }
+
+  /**
+   * One chunk of dictated audio.
+   *
+   * Authenticated the same way as a command — the sealed box is bound to the
+   * session/epoch/chunk index by AAD, and an Ed25519 signature over that box is
+   * verified against the pinned controller identity — so a controller cannot
+   * inject audio it did not send. The payload is base64 PCM and is held in
+   * memory only; the host never writes audio to disk.
+   */
+  async #onAudio(data) {
+    const session = this.session;
+    if (!session || data.sessionId !== session.sessionId) return;
+    const attachment = session.controllers.get(data.attachmentId);
+    if (!attachment || data.epoch !== session.epoch) return;
+    const signed = canonicalJson({
+      sessionId: data.sessionId,
+      index: data.index,
+      epoch: data.epoch,
+      deviceId: attachment.deviceId,
+      enc: data.enc,
+    });
+    if (!verify(signed, data.sig, attachment.identityPub)) return;
+    let payload;
+    try {
+      payload = openJson(
+        session.groupKey,
+        data.enc,
+        frameAad({ sessionId: data.sessionId, epoch: data.epoch, seq: data.index, type: "session.audio" }),
+      );
+    } catch {
+      return;
+    }
+    const chunk = typeof payload?.chunk === "string" ? payload.chunk : "";
+    if (!chunk || chunk.length > MAX_CHUNK_CHARS) return;
+    this.emit("audio", { sessionId: data.sessionId, deviceId: attachment.deviceId, index: data.index, data: chunk });
   }
 
   async #onCommand(data) {

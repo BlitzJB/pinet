@@ -39,6 +39,21 @@ export interface SessionMeta {
   cwd?: string | null;
   host?: string;
   spawn?: SpawnCapability | null;
+  /** Present when the host has a dictation provider configured. */
+  voice?: { enabled: boolean } | null;
+}
+
+/** One dictation result: the cleaned text, plus what came back from the host. */
+export interface VoiceResult {
+  text: string;
+  raw?: string;
+  /** Advisory flags: no_speech, empty, meta, dropped_content, added_content, cleanup_failed, voice_disabled. */
+  flags?: string[];
+  guard?: { coverage?: number; novelty?: number };
+  durationMs?: number;
+  timings?: { asrMs?: number; cleanMs?: number; totalMs?: number };
+  /** Local arrival time, used to expire the undo affordance. */
+  at?: number;
 }
 
 export type AttachmentMode = "read" | "control";
@@ -63,6 +78,8 @@ export interface SessionState {
   historyLoading: boolean;
   pendingEchoes: number;
   outbox: Outbox | null;
+  /** Latest dictation result, consumed by the composer (insert + undo). */
+  voice: VoiceResult | null;
 }
 
 export interface ModelInfo {
@@ -116,6 +133,7 @@ export class PiNetConnection {
         historyLoading: false,
         pendingEchoes: 0,
         outbox: null,
+        voice: null,
       });
       this.stores.set(sessionId, store);
     }
@@ -207,6 +225,14 @@ export class PiNetConnection {
       });
     });
     controller.on("meta", (data: any) => this.store(data.sessionId).set({ meta: data.meta ?? null }));
+    controller.on("voice", (data: any) => {
+      // The host publishes dictation as a sealed frame rather than a command ack
+      // (acks are plaintext at the coordinator, and this is the user's speech).
+      const { sessionId, epoch, seq, ...result } = data ?? {};
+      void epoch;
+      void seq;
+      this.store(sessionId).set({ voice: { ...(result as VoiceResult), at: Date.now() } });
+    });
     controller.on("removed", (data: any) => this.store(data.sessionId).set({ attached: false }));
     controller.on("decrypt_error", () => this.conn.set((state) => ({ ...state })));
   }
@@ -273,6 +299,31 @@ export class PiNetConnection {
   }
   compact(sessionId: string, instructions?: string): Promise<unknown> {
     return this.controller!.command(sessionId, "compact", instructions ? { instructions } : {});
+  }
+
+  /** Reset the host's audio buffer and declare a new utterance. */
+  startVoice(sessionId: string): Promise<unknown> {
+    return this.controller!.command(sessionId, "voice.start", {});
+  }
+
+  /** One sealed audio chunk. Indices are per-utterance and keep the order. */
+  sendVoiceChunk(sessionId: string, chunk: string, index: number): Promise<void> {
+    if (!this.controller) throw new Error("not connected");
+    return this.controller.sendAudio(sessionId, chunk, index);
+  }
+
+  /** Finish the utterance; the host answers with a sealed `voice` frame. */
+  endVoice(sessionId: string): Promise<unknown> {
+    return this.controller!.command(sessionId, "voice.end", {});
+  }
+
+  cancelVoice(sessionId: string): Promise<unknown> {
+    return this.controller!.command(sessionId, "voice.cancel", {});
+  }
+
+  /** The result has been inserted (or dismissed). */
+  clearVoice(sessionId: string): void {
+    this.store(sessionId).set({ voice: null });
   }
 
   /**

@@ -13,7 +13,7 @@
  */
 
 import { hostname } from "node:os";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { HostBridge } from "../src/host/bridge.mjs";
 import { createSerialQueue } from "../src/host/command-queue.mjs";
@@ -21,6 +21,7 @@ import { resolveDelivery } from "../src/host/delivery.mjs";
 import { clearHostState, ensureHostKeys, enrollHostWithCode, loadHostState, onboardHost, saveHostState } from "../src/host/onboarding.mjs";
 import { SessionSpawner, detectGit, detectTmux } from "../src/host/spawner.mjs";
 import { HISTORY_PAGE_SIZE, INITIAL_ENTRY_LIMIT, historyWindow } from "../src/host/history.mjs";
+import { DEFAULT_POLICIES, VoicePipeline, createCleaner, createTranscriber, resolveApiKey } from "../src/host/voice.mjs";
 
 type Json = Record<string, unknown>;
 type Pi = ExtensionAPI;
@@ -79,6 +80,41 @@ export default function pinet(pi: Pi): void {
   const COMPACT_STALE_MS = Number(process.env.PINET_COMPACT_STALE_MS ?? 900_000);
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+  // Voice dictation (see src/host/voice.mjs). Audio arrives as sealed chunks on
+  // the existing attachment and is held in memory only — never written to disk —
+  // and the finished text goes back sealed, so the coordinator sees neither. The
+  // cleanup policy is prompt-side; this only bounds and forwards.
+  const voiceTerms = (): string[] => {
+    const extra = (process.env.PINET_VOICE_TERMS ?? "")
+      .split(",")
+      .map((term) => term.trim())
+      .filter(Boolean);
+    return [...new Set([...DEFAULT_POLICIES.terms, ...extra])];
+  };
+  const voiceApiKey = resolveApiKey({
+    readAuth: () => JSON.parse(readFileSync(`${process.env.HOME ?? "."}/.pi/agent/auth.json`, "utf8")) as Record<string, { key?: string }>,
+  });
+  const voicePipeline =
+    process.env.PINET_VOICE === "off" || !voiceApiKey
+      ? undefined
+      : new VoicePipeline({
+          transcriber: createTranscriber({
+            apiKey: voiceApiKey,
+            model: process.env.PINET_VOICE_ASR_MODEL,
+            baseUrl: process.env.PINET_VOICE_ASR_URL,
+          }),
+          cleaner: createCleaner({
+            apiKey: voiceApiKey,
+            model: process.env.PINET_VOICE_LLM_MODEL,
+            baseUrl: process.env.PINET_VOICE_LLM_URL,
+          }),
+          policies: { ...DEFAULT_POLICIES, terms: voiceTerms() },
+        });
+  // One session per process, so one buffer. ~250ms chunks, capped at two minutes
+  // by the pipeline's byte limit.
+  let audioChunks: { index: number; data: string }[] = [];
+  const MAX_AUDIO_CHUNKS = 1024;
 
   // Session spawner (see src/host/spawner.mjs). `PINET_SPAWN_MODE=off` disables it.
   const spawner = new SessionSpawner({
@@ -166,6 +202,7 @@ export default function pinet(pi: Pi): void {
       name: pi.getSessionName() ?? null,
       cwd: ctx.cwd,
       host: hostname(),
+      voice: voicePipeline?.enabled ? { enabled: true } : null,
       spawn: spawner.enabled ? { ...spawner.capability(), cwd: ctx.cwd } : null,
     };
   }
@@ -420,11 +457,21 @@ export default function pinet(pi: Pi): void {
       case "set_thinking":
         pi.setThinkingLevel(String(args.level ?? "off") as never);
         return { accepted: true, mode: "immediate" };
+      case "voice.start":
+      case "voice.cancel":
+        takeAudio();
+        return { accepted: true, mode: null };
+      case "voice.end": {
+        // Fire-and-forget from the caller's perspective: the transcript arrives
+        // as a sealed `session.voice` frame, never in this (plaintext) ack.
+        if (!voicePipeline?.enabled) return { accepted: false, mode: null, error: "voice_disabled" };
+        void finishVoice(ctx);
+        return { accepted: true, mode: null };
+      }
       case "rename":
         pi.setSessionName(String(args.name ?? ""));
         return { accepted: true, mode: "immediate" };
-      case "spawn": {
-        const result = spawner.spawn({ name: typeof args.name === "string" ? args.name : undefined });
+      case "spawn": {        const result = spawner.spawn({ name: typeof args.name === "string" ? args.name : undefined });
         if (!result.ok) return { accepted: false, mode: null, error: result.error };
         safe(() => bridge?.publishMeta(buildMeta(ctx)));
         return {
@@ -464,6 +511,7 @@ export default function pinet(pi: Pi): void {
     // extension bridgeless, or nothing would ever register the session.
     bridge = hostBridge;
     hostBridge.onCommand((command) => queue.run(() => handleCommand(command)));
+    startVoiceBridge();
     hostBridge.on("disconnected", () => {
       pi.events.emit("pinet:status", { connected: false, reason: "disconnected" });
     });
@@ -605,6 +653,7 @@ export default function pinet(pi: Pi): void {
     stopStatusHeartbeat();
     if (settleTimer) clearTimeout(settleTimer);
     settleTimer = undefined;
+    takeAudio();
     activeCtx = undefined;
     sessionId = undefined;
     sentIds = [];
@@ -696,6 +745,47 @@ export default function pinet(pi: Pi): void {
     adopt(ctx);
     publishRebase(ctx);
   });
+
+  // -- voice ----------------------------------------------------------------
+
+  function takeAudio(): { index: number; data: string }[] {
+    const chunks = audioChunks;
+    audioChunks = [];
+    return chunks;
+  }
+
+  /**
+   * Dictated audio → transcript → cleaned text. The result is published as a
+   * sealed `session.voice` frame and deliberately *not* echoed in the command
+   * ack: acks are plaintext at the coordinator, and this is the user's speech.
+   */
+  async function finishVoice(ctx: ExtensionContext): Promise<void> {
+    const chunks = takeAudio();
+    if (!voicePipeline?.enabled || !chunks.length) {
+      safe(() => bridge?.publishVoice({ text: "", raw: "", flags: [chunks.length ? "voice_disabled" : "no_speech"] }));
+      return;
+    }
+    try {
+      const result = await voicePipeline.finish(chunks, { context: { cwd: ctx.cwd } });
+      trace(
+        "voice",
+        `chunks=${chunks.length} duration=${result.durationMs ?? 0}ms asr=${result.timings?.asrMs ?? 0}ms clean=${result.timings?.cleanMs ?? 0}ms total=${result.timings?.totalMs ?? 0}ms flags=${result.flags.join(",") || "-"}`,
+      );
+      safe(() => bridge?.publishVoice(result));
+    } catch (error) {
+      const code = (error as { code?: string })?.code ?? "voice_failed";
+      reportError("voice", error);
+      safe(() => bridge?.publishVoice({ text: "", raw: "", flags: [code] }));
+    }
+  }
+
+  function startVoiceBridge(): void {
+    if (!voicePipeline?.enabled) return;
+    bridge?.onAudio(({ index, data }) => {
+      if (audioChunks.length >= MAX_AUDIO_CHUNKS) return;
+      audioChunks.push({ index, data });
+    });
+  }
 
   void autoStart();
   trace("extension loaded");
