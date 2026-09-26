@@ -87,7 +87,7 @@ unit-test with adversarial inputs.
 |---|---|---|---|
 | **Groq `whisper-large-v3-turbo`** | positioned for "real-time processing" | **$0.04 / audio-hour** | OpenAI-compatible `/v1/audio/transcriptions`; a 10s utterance ≈ $0.00001 |
 | **OpenAI `gpt-4o-mini-transcribe` / `gpt-4o-transcribe`** | fast; streaming variants exist | higher than whisper | `whisper-1` is on the deprecation path (legacy audio families) |
-| **Fireworks audio** | "1 hour of audio in 4 seconds" (2024 launch) | cheap | **endpoint is now deprecated** — litellm issue #30916 is titled *"Remove deprecated Fireworks AI audio transcriptions endpoint"*, and it no longer appears in Fireworks' docs index |
+| **Fireworks audio** | "1 hour of audio in 4 seconds" at launch (2024) | was cheap | **Deprecated 2026-06-10.** Their own changelog entry is titled *"Audio inference and image generation deprecation"* and reads, in full: *"Audio inference and image generation are deprecated."* Verified against the live API with this account's key: `GET /v1/models` → 200, 27 models, **none audio**; `POST /v1/audio/transcriptions` → **401** for every whisper id (`whisper-large-v3`, `whisper-v3`, and the turbo variants). Fireworks' *LLMs* remain first-class for the cleanup pass. |
 | **Local — NVIDIA Parakeet (FastConformer transducer, MLX)** | *streaming*: "a streaming machine that keeps up with the microphone" | free | best structural fit for local live dictation; Apple Silicon |
 | **Local — Whisper large-v3 (whisper.cpp / MLX)** | windowed/autoregressive (not streaming by nature) | free | accurate, mature; needs a few hundred MB |
 | **Browser Web Speech API** | ~instant (OS-level) | free | Chrome routes audio to Google; Safari support is partial; Firefox ✗ |
@@ -250,7 +250,8 @@ Each phase ships independently with tests and a doc update.
 
 1. **Cloud ASR key?** Groq ($0.04/hr, built for real-time) vs OpenAI (stronger on
    noisy audio) vs none (local-only). Neither existing key (`deepseek`,
-   `fireworks`) covers ASR, and Fireworks' endpoint is deprecated.
+   `fireworks`) covers ASR, and Fireworks' Whisper was **deprecated 2026-06-10**
+   (see §2.3 for the changelog quote and the live API probe).
 2. **Install local ASR on the Macs?** whisper.cpp / parakeet-mlx (a few hundred MB)
    buys a fully private, license-free path. The VM cannot host it (no binaries,
    and no microphone near it).
@@ -289,7 +290,7 @@ Each phase ships independently with tests and a doc update.
 - Wispr Flow, *Technical challenges and breakthroughs behind Flow* — https://wisprflow.ai/post/technical-challenges
 - Baseten, *Wispr Flow creates effortless voice dictation with Llama on Baseten* — https://www.baseten.co/resources/customers/wispr-flow/
 - Resonant, *We Detect When AI Hallucinates Your Words* — https://www.onresonant.com/blog/hallucination-detection
-- Fireworks, *20x faster Whisper than OpenAI* — https://fireworks.ai/blog/audio-transcription-launch (endpoint now deprecated: litellm#30916)
+- Fireworks, *20x faster Whisper than OpenAI* — https://fireworks.ai/blog/audio-transcription-launch (what it was; audio inference deprecated 2026-06-10 per https://docs.fireworks.ai/updates/changelog, and the endpoint 401s with a working account key)
 - Groq, *Whisper Large v3 Turbo* — https://console.groq.com/docs/model/whisper-large-v3-turbo
 - OpenAI, *Whisper prompting guide* — https://developers.openai.com/cookbook/examples/whisper_prompting_guide
 - *Local Speech To Text on M5 Max: Whisper large-v3 vs Parakeet on MLX* — https://contracollective.com/blog/local-speech-to-text-whisper-parakeet-mlx-m5-max-2026
