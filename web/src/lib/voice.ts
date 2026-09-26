@@ -84,6 +84,25 @@ const isPermissionError = (error: unknown): boolean => {
   return name === "NotAllowedError" || name === "SecurityError";
 };
 
+function refusedBeforePromptSteps(): string {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  const steps = [];
+  if (/Macintosh/i.test(ua)) {
+    steps.push(
+      "macOS: System Settings → Privacy & Security → Microphone → turn on your browser (and the installed app, if it is listed separately), then quit the browser completely (\u2318Q, not just the window) and reopen it — a reload keeps the old state.",
+    );
+    steps.push("If that switch is greyed out or says your administrator controls it, a management profile is blocking it and no local setting can override it.");
+  } else if (/Android/i.test(ua)) {
+    steps.push("Android: Settings → Apps → Chrome → Permissions → Microphone → Allow, then reopen Chrome.");
+  } else if (/iPhone|iPad|iPod/i.test(ua)) {
+    steps.push("iOS: Settings → Safari → Microphone → Allow.");
+  } else {
+    steps.push("Operating system: grant your browser microphone access in the system privacy settings, then fully quit and reopen it.");
+  }
+  steps.push("Cross-check with a different browser: each app has its own microphone permission, so if another one prompts and works, the first browser is the one being refused.");
+  return steps.join(" ");
+}
+
 /**
  * How to unblock a microphone the browser has recorded as denied. `denied` (as
  * opposed to `prompt`) means a decision is stored against this origin, so
@@ -158,7 +177,7 @@ export async function captureDiagnostics(extra: Record<string, unknown> = {}): P
  *   2. the site is allowed but the *OS* is blocking the browser/app
  *   3. the device is missing, busy, or cannot satisfy the constraints
  */
-export function micErrorInfo(error: unknown, permission: PermissionState | "unknown" = "unknown"): MicErrorInfo {
+export function micErrorInfo(error: unknown, permission: PermissionState | "unknown" = "unknown", elapsedMs?: number): MicErrorInfo {
   const name = (error as { name?: string })?.name ?? "Error";
   const secure = typeof isSecureContext === "boolean" ? String(isSecureContext) : "unknown";
   const detail = `${name}: ${(error as { message?: string })?.message ?? ""} (permission=${permission}, secureContext=${secure})`;
@@ -171,9 +190,23 @@ export function micErrorInfo(error: unknown, permission: PermissionState | "unkn
         detail,
       };
     }
+    // Site permission is still "ask"/unknown, yet the call was refused — and
+    // refused *instantly*, without a prompt ever appearing. That means the
+    // refusal happened before the browser could ask, i.e. at the app/OS level:
+    // Chrome has no microphone access of its own, so no site setting can help.
+    // (A site-level block would read "denied" above; a prompt would have taken
+    // seconds and returned an answer.)
+    const instant = typeof elapsedMs === "number" && elapsedMs < 250;
+    if (instant) {
+      return {
+        message: "Your system is blocking the browser's microphone",
+        hint: `${refusedBeforePromptSteps()}`,
+        detail: `${detail} rejectedAfterMs=${Math.round(elapsedMs ?? -1)} (no prompt was shown)`,
+      };
+    }
     return {
       message: "Something outside the page is blocking the microphone",
-      hint: "The site is allowed, so the operating system is refusing it: enable your browser (or this installed app) in System Settings → Privacy & Security → Microphone, then restart it. On iOS: Settings → Safari → Microphone.",
+      hint: "The site is allowed, so the operating system is refusing it: enable your browser (or this installed app) in System Settings → Privacy & Security → Microphone, then quit and reopen it. On iOS: Settings → Safari → Microphone.",
       detail,
     };
   }
@@ -232,10 +265,11 @@ export async function startVoiceRecorder({ onChunk, onError, onLevel }: Recorder
   if (!voiceSupported()) throw new Error("This browser cannot capture audio (AudioWorklet unavailable)");
 
   let stream: MediaStream;
+  const startedAt = Date.now();
   try {
     stream = await openInputStream();
   } catch (error) {
-    throw new MicError(micErrorInfo(error, await micPermissionState()));
+    throw new MicError(micErrorInfo(error, await micPermissionState(), Date.now() - startedAt));
   }
 
   const context = new AudioContext();
