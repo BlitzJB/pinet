@@ -269,6 +269,13 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
             onStop={() => void connection.abort(sessionId).catch(() => {})}
             onCompact={() => void connection.compact(sessionId).catch(() => {})}
             onThinking={(level) => void connection.setThinking(sessionId, level).catch(() => {})}
+            voiceEnabled={Boolean(state.meta?.voice?.enabled)}
+            voice={state.voice}
+            onVoiceStart={() => void connection.startVoice(sessionId).catch(() => {})}
+            onVoiceChunk={(chunk, index) => connection.sendVoiceChunk(sessionId, chunk, index)}
+            onVoiceEnd={() => void connection.endVoice(sessionId).catch(() => {})}
+            onVoiceCancel={() => void connection.cancelVoice(sessionId).catch(() => {})}
+            onVoiceConsumed={() => connection.clearVoice(sessionId)}
           />
           {cwd && (
             <div className="truncate px-1 text-center text-[11px] leading-tight text-muted-foreground/50" title={cwd}>

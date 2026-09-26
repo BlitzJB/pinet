@@ -63,7 +63,7 @@ export class PiNetController extends Emitter {
 
     socket.on("e2e.key", (data) => this.#enqueue(() => this.#onKey(data)));
     socket.on("ctl.attached", (data) => this.#rememberHost(data));
-    for (const type of ["session.snapshot", "session.rebase", "session.entries", "session.page", "session.status", "session.meta"]) {
+    for (const type of ["session.snapshot", "session.rebase", "session.entries", "session.page", "session.status", "session.voice", "session.meta"]) {
       socket.on(type, (data, msg) => this.#enqueue(() => this.#onFrame(type, data, msg)));
     }
     socket.on("session.removed", (data) => this.emit("removed", data));
@@ -163,6 +163,24 @@ export class PiNetController extends Emitter {
       }
       throw error;
     }
+  }
+
+  /**
+   * One chunk of dictated audio, sealed like a session frame and signed like a
+   * command. Chunk indices are per-utterance and double as the frame sequence,
+   * so the host can order them and reject replays outside the epoch.
+   */
+  async sendAudio(sessionId, chunk, index) {
+    const entry = this.keys.get(sessionId);
+    if (!entry) throw new Error(`no session key for ${sessionId}; attach first`);
+    const epoch = entry.epoch;
+    const aad = frameAad({ sessionId, epoch, seq: index, type: "session.audio" });
+    const enc = await sealJson(this.cryptoProvider, entry.key, { chunk }, aad);
+    const sig = await this.cryptoProvider.sign(
+      canonicalJson({ sessionId, index, epoch, deviceId: this.deviceId, enc }),
+      this.identity.privateKey,
+    );
+    this.socket.send("ctl.audio", { sessionId, index, epoch, enc, sig });
   }
 
   async #waitForKey(sessionId, timeoutMs) {
@@ -280,6 +298,7 @@ export class PiNetController extends Emitter {
     else if (type === "session.entries") this.emit("entries", event);
     else if (type === "session.page") this.emit("page", event);
     else if (type === "session.status") this.emit("status", event);
+    else if (type === "session.voice") this.emit("voice", event);
     else if (type === "session.meta") this.emit("meta", event);
   }
 }

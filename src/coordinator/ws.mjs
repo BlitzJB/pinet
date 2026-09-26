@@ -33,6 +33,14 @@ function send(ws, type, data = {}, route) {
   ws.send(JSON.stringify(msg));
 }
 
+/**
+ * Cap on one sealed audio chunk, measured on its serialized size (the box is a
+ * nested object on the wire). Audio is relayed opaquely — the coordinator never
+ * decrypts it — so this bound is about relay work, not content. Mirrors
+ * MAX_CHUNK_CHARS in src/host/voice.mjs.
+ */
+const MAX_AUDIO_CHARS = 64 * 1024;
+
 export function createGateway({ server, accounts, serverId, now = Date.now, registry = new Registry(), allowedOrigins = [], verifySession }) {
   const wss = new WebSocketServer({
     server,
@@ -221,6 +229,7 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
       case "session.entries":
       case "session.page":
       case "session.status":
+      case "session.voice":
       case "session.meta": {
         const sessionId = route.sessionId ?? data.sessionId;
         const session = registry.sessions.get(sessionId);
@@ -324,6 +333,29 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
           epoch: data.epoch ?? session.epoch,
           commandId: data.commandId,
           op: data.op,
+          enc: data.enc,
+          sig: data.sig,
+          deviceId: auth.deviceId,
+        });
+        return;
+      }
+      // Dictated audio, relayed exactly like session frames: the payload is
+      // sealed, so the coordinator can bound and forward it but never read it.
+      // No ack — chunks are fire-and-forget; `voice.end` is the command that
+      // produces the result.
+      case "ctl.audio": {
+        const info = registry.controllers.get(ws);
+        const attachment = info?.attachments.get(data.sessionId);
+        if (!attachment || attachment.mode !== "control") return;
+        const session = registry.sessions.get(data.sessionId);
+        const host = registry.hostFor(data.sessionId);
+        if (!session || !host) return;
+        if (!data.enc || JSON.stringify(data.enc).length > MAX_AUDIO_CHARS) return;
+        send(host.ws, "audio.deliver", {
+          sessionId: data.sessionId,
+          attachmentId: attachment.attachmentId,
+          epoch: data.epoch ?? session.epoch,
+          index: data.index,
           enc: data.enc,
           sig: data.sig,
           deviceId: auth.deviceId,

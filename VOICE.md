@@ -424,3 +424,71 @@ Each phase ships independently with tests and a doc update.
 - amical (formatting prompt / filler lists) — https://github.com/amicalhq/amical
 - Deepgram filler-word handling — https://github.com/deepgram/recipes
 - openchamber feature request, "AI cleanup/rewrite pass for dictation transcripts (Wispr Flow-style)" — https://github.com/openchamber/openchamber/issues/2114
+
+---
+
+## 10. What was actually built (and the decisions behind it)
+
+Shipped as v0.11.0. The plan above proposed a layered pipeline with a
+deterministic pre-pass; **that was dropped after testing**, on the user's call
+and with the data to back it:
+
+**The cleanup is a policy in the prompt, not code.** One LLM call at temperature
+0 with the shipped ruleset, which encodes what would otherwise have been the
+deterministic "C-series": the speaker's vocabulary, the spoken-command
+conventions, the code/identifier conventions and the strict editing rules.
+
+The test that settled it — messy dictation through the real model with the
+shipped prompt:
+
+```
+in : "um so i want to add uh a rate limit to the the auth endpoint you know like
+      100 requests per minute and uh rename get user underscore by id new line
+      also the pin net coordinator talks to type script over gee it hub and i'm
+      gonna wanna check it"
+out: "So I want to add a rate limit to the auth endpoint, you know, like 100
+      requests per minute, and rename get_user_by_id.
+      Also, the PiNet coordinator talks to TypeScript over GitHub, and I'm gonna
+      wanna check it."
+```
+
+✓ PiNet ✓ TypeScript ✓ GitHub ✓ get_user_by_id ✓ line break kept ✓ "gonna" kept
+✓ 100 kept ✓ fillers gone. The model handles disfluency, stutters, doubled words
+and self-corrections on its own — so those rules were redundant — and the one
+thing it cannot do is *know* a proper noun (asked to clean "pin net" it wrote
+"Pinnet"), which is why vocabulary is stated rather than inferred.
+
+**Measured, real providers** (Groq `whisper-large-v3-turbo` + `qwen/qwen3.8-27b`):
+
+| Step | Result |
+|---|---|
+| ASR | 525 KB / ~10 s of real speech → **340 ms**, transcript verbatim |
+| Cleanup | **309 ms** for a 10-sentence transcript; output identical to input |
+| Guard | coverage 1.00, novelty 0.00 — no invention on clean input |
+| Policy cleanup | 232 ms, all eight policy checks pass |
+
+Note the cleanup is proportional to output length: a 10-sentence take costs
+~300 ms, a typical 3–5 s dictation closer to 100–150 ms.
+
+**Two findings that changed the guard design.** It is advisory, and only `empty`
+and `meta` block:
+
+1. It *false-rejected correct output* when the vocabulary policy joins a term
+   ("pin net" → "PiNet" loses tokens) — fixed by counting dots only inside a
+   token, so a sentence-final period no longer corrupts the word.
+2. It also false-rejects self-corrections, where dropping superseded words is
+   right, so the thresholds are deliberately loose (coverage ≥ 0.3, novelty ≤ 0.5)
+   and the flags surface in the UI as "check this one" rather than silently
+   replacing the model's work.
+
+**Still open:** the model kept "you know, like" in the transcript above. Keeping
+"like" is defensible ("like 100" ≈ approximately 100) but "you know" at a clause
+boundary is filler, so the prompt needs a sharper rule there. Pause-based
+auto-stop (VAD) is also not implemented — recording is tap-to-start/stop, with
+Escape to cancel.
+
+**Architecture as shipped:** `session.audio` (sealed PCM chunks, controller →
+host) and `session.voice` (sealed result) are relayed by the coordinator without
+being read; each chunk is signed like a command and bound to the session/epoch/
+index by AAD. The result is deliberately *not* echoed in the command ack, because
+acks are plaintext at the coordinator and this is the user's speech.
