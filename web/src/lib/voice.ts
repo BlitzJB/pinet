@@ -84,6 +84,34 @@ const isPermissionError = (error: unknown): boolean => {
   return name === "NotAllowedError" || name === "SecurityError";
 };
 
+/**
+ * How to unblock a microphone the browser has recorded as denied. `denied` (as
+ * opposed to `prompt`) means a decision is stored against this origin, so
+ * reloading cannot clear it — the site setting has to be changed. The steps are
+ * platform-specific because the setting lives in a different place on each.
+ */
+function unblockSteps(): string {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  const steps = [
+    "Click the icon at the left of the address bar → Microphone → Allow, then reload.",
+    "If the site is listed under Blocked in chrome://settings/content/microphone, move it to Allowed.",
+  ];
+  if (/Android/i.test(ua)) {
+    steps.splice(0, 0, "Android: Settings → Apps → Chrome → Permissions → Microphone → Allow.");
+  }
+  if (/iPhone|iPad|iPod/i.test(ua)) {
+    steps.splice(0, 0, "iOS: Settings → Safari → Microphone → Allow (and the per-site menu via the \"aA\" button).");
+  }
+  if (/Macintosh|Windows|Linux/i.test(ua)) {
+    steps.push("On a managed/work machine, open chrome://policy — a microphone policy cannot be overridden from the UI.");
+  }
+  if (typeof window !== "undefined" && window.matchMedia?.("(display-mode: standalone)")?.matches) {
+    steps.push("You are in the installed app window: open the same URL in a normal browser tab to change the site permission, then come back.");
+  }
+  steps.push("To isolate a stored block from an OS or policy block: open the same URL in a private/incognito window. It starts from a fresh permission state.");
+  return steps.join(" ");
+}
+
 /** The browser's remembered decision, when it will tell us. */
 export async function micPermissionState(): Promise<PermissionState | "unknown"> {
   try {
@@ -138,8 +166,8 @@ export function micErrorInfo(error: unknown, permission: PermissionState | "unkn
   if (isPermissionError(error)) {
     if (permission === "denied") {
       return {
-        message: "The browser is blocking the microphone for this site",
-        hint: "Click the mic icon in the address bar → Microphone → Allow, then reload.",
+        message: "The browser has blocked the microphone for this site",
+        hint: unblockSteps(),
         detail,
       };
     }
