@@ -161,6 +161,17 @@ if [ -z "$new_pid" ]; then
   done
 fi
 [ -n "$new_pid" ] || die "no new pi process appeared in pane $TMUX_TARGET"
+
+# A bad extension makes pi print an error and exit immediately, which previously
+# left the host silently down (the pane just showed a shell). Catch it here and
+# capture the reason into this log.
+sleep 4
+if ! kill -0 "$new_pid" 2>/dev/null; then
+  log "ERROR: pi exited within seconds of starting — pane contents: "
+  tmuxq capture-pane -t "$TMUX_TARGET" -p 2>/dev/null | grep -vE '^[[:space:]]*$' | tail -20 | while IFS= read -r line; do log "  | $line"; done
+  die "new pi ($new_pid) exited immediately — likely an extension failed to load (try 'pi -ne' to confirm)"
+fi
+log "new pi stayed up (pid=$new_pid)"
 log "new pi running: pid=$new_pid cmd=$(tr '\0' ' ' < "/proc/$new_pid/cmdline" 2>/dev/null)"
 
 # --- verify it reached the coordinator --------------------------------------
