@@ -189,4 +189,52 @@ describe("host extension delta streaming", () => {
       delete process.env.PI_SUBAGENT_CHILD;
     }
   });
+
+  it("ships only a tail and pages older history on demand", async () => {
+    const entries = Array.from({ length: 500 }, (_, i) => ({
+      type: "message",
+      id: `e${i}`,
+      parentId: i ? `e${i - 1}` : null,
+      message: { role: "user", content: `msg ${i}` },
+    }));
+
+    const enrolled = enrollDevice(coord.accounts, account.id, "host", "paging");
+    writeFileSync(
+      join(dir, "host.json"),
+      JSON.stringify({ hostId: enrolled.device.id, identity: enrolled.identity, encryption: enrolled.encryption }),
+    );
+    process.env.PINET_DIR = dir;
+    process.env.PINET_HUB = coord.url;
+    process.env.PINET_HTTP = coord.httpUrl;
+
+    const pi = fakePi();
+    hostExtension(pi);
+    await pi.handlers.session_start[0]({}, makeCtx({ entries }));
+
+    const ctl = enrollDevice(coord.accounts, account.id, "controller", "paging-ctl");
+    const controller = new PinetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
+    await controller.connect();
+
+    const snapshot = waitFor(controller, "snapshot", () => true, 10_000);
+    await controller.attach(SESSION, "control");
+    const first = await snapshot;
+    // Only the newest 200 of 500 entries, plus a cursor for the rest.
+    expect(first.entries).toHaveLength(200);
+    expect(first.entries[0].id).toBe("e300");
+    expect(first.history).toMatchObject({ cursor: 300, hasMore: true, total: 500 });
+
+    const page = waitFor(controller, "page", () => true, 10_000);
+    const ack = await controller.command(SESSION, "history", { before: 300 });
+    expect(ack).toMatchObject({ accepted: true, data: { cursor: 150, hasMore: true, returned: 150 } });
+    const older = await page;
+    expect(older.entries).toHaveLength(150);
+    expect(older.entries[0].id).toBe("e150");
+    expect(older.history).toMatchObject({ cursor: 150, hasMore: true });
+
+    // The final page reports the start of the transcript.
+    const last = waitFor(controller, "page", (data) => data.history?.hasMore === false, 10_000);
+    await controller.command(SESSION, "history", { before: 150 });
+    expect((await last).entries[0].id).toBe("e0");
+    controller.close();
+  });
 });

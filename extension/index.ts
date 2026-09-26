@@ -20,6 +20,7 @@ import { createSerialQueue } from "../src/host/command-queue.mjs";
 import { resolveDelivery } from "../src/host/delivery.mjs";
 import { clearHostState, ensureHostKeys, enrollHostWithCode, loadHostState, onboardHost, saveHostState } from "../src/host/onboarding.mjs";
 import { SessionSpawner, detectGit, detectTmux } from "../src/host/spawner.mjs";
+import { HISTORY_PAGE_SIZE, INITIAL_ENTRY_LIMIT, historyWindow } from "../src/host/history.mjs";
 
 type Json = Record<string, unknown>;
 type Pi = ExtensionAPI;
@@ -154,10 +155,21 @@ export default function pinet(pi: Pi): void {
     };
   }
 
+  // Transcript paging: a long session (multi-MB JSONL) must not be shipped in one
+  // snapshot. See src/host/history.mjs for the window arithmetic.
   function snapshot(ctx: ExtensionContext): Json {
     const entries = ctx.sessionManager.getEntries() as unknown as Json[];
+    // `sentIds` still tracks every entry so delta sync stays exact; only the
+    // frame is trimmed to the tail.
     sentIds = entries.map((entry) => String(entry.id));
-    return { entries, status: buildStatus(ctx), meta: buildMeta(ctx), leafId: ctx.sessionManager.getLeafId() ?? null };
+    const window = historyWindow(entries.length, entries.length, INITIAL_ENTRY_LIMIT);
+    return {
+      entries: entries.slice(window.start, window.end),
+      history: { cursor: window.cursor, hasMore: window.hasMore, total: window.total },
+      status: buildStatus(ctx),
+      meta: buildMeta(ctx),
+      leafId: ctx.sessionManager.getLeafId() ?? null,
+    };
   }
 
   function syncEntries(ctx: ExtensionContext): void {
@@ -250,6 +262,18 @@ export default function pinet(pi: Pi): void {
       case "abort":
         ctx.abort();
         return { accepted: true, mode: "immediate" };
+      case "history": {
+        // Older entries for the transcript. The page is published as an encrypted
+        // `session.page` frame; the ack only carries the resulting cursor.
+        const entries = ctx.sessionManager.getEntries() as unknown as Json[];
+        const before = typeof args.before === "number" ? args.before : entries.length;
+        const requested = typeof args.limit === "number" ? args.limit : HISTORY_PAGE_SIZE;
+        const limit = Math.min(Math.max(1, requested), 500);
+        const window = historyWindow(entries.length, before, limit);
+        const history = { cursor: window.cursor, hasMore: window.hasMore, total: window.total };
+        safe(() => bridge?.publishPage(entries.slice(window.start, window.end), history, ctx.sessionManager.getLeafId() ?? null));
+        return { accepted: true, mode: "immediate", data: { ...history, returned: window.end - window.start } };
+      }
       case "compact":
         ctx.compact(args.instructions ? { customInstructions: String(args.instructions) } : undefined);
         return { accepted: true, mode: "immediate" };

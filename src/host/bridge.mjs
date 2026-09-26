@@ -115,8 +115,16 @@ export class HostBridge extends EventEmitter {
     return session.epoch;
   }
 
-  publishSnapshot({ entries = [], status = null, meta = undefined, leafId = null } = {}) {
-    this.#publish("session.snapshot", { entries, status, meta: meta ?? this.session.meta, leafId });
+  publishSnapshot({ entries = [], status = null, meta = undefined, leafId = null, history = null } = {}) {
+    this.#publish("session.snapshot", { entries, status, meta: meta ?? this.session.meta, leafId, history });
+  }
+
+  /**
+   * An older page of history, answering a controller's `history` command. Goes
+   * out encrypted like every other session frame (the coordinator stays opaque).
+   */
+  publishPage(entries, history, leafId = null) {
+    this.#publish("session.page", { entries: entries ?? [], history: history ?? null, leafId });
   }
 
   publishEntries(entries) {

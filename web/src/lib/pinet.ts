@@ -53,6 +53,14 @@ export interface SessionState {
   attached: boolean;
   /** True while a full refetch (initial attach / gap resync) is in flight. */
   syncing: boolean;
+  /**
+   * History paging: a snapshot carries only a recent tail, so older entries are
+   * fetched on demand. `historyCursor` is the host's index of the oldest entry we
+   * hold (null when everything is loaded).
+   */
+  historyCursor: number | null;
+  historyHasMore: boolean;
+  historyLoading: boolean;
   pendingEchoes: number;
   outbox: Outbox | null;
 }
@@ -103,6 +111,9 @@ export class PinetConnection {
         mode: "control",
         attached: false,
         syncing: false,
+        historyCursor: null,
+        historyHasMore: false,
+        historyLoading: false,
         pendingEchoes: 0,
         outbox: null,
       });
@@ -176,9 +187,10 @@ export class PinetConnection {
       this.conn.set({ status: "connected" });
     });
     controller.on("resync_error", (data: any) => this.store(data.sessionId).set({ syncing: false }));
-    controller.on("snapshot", (data: any) => this.#applyFull(data.sessionId, data.entries, data.status, data.meta, data.epoch));
+    controller.on("snapshot", (data: any) => this.#applyFull(data.sessionId, data.entries, data.status, data.meta, data.epoch, data.history));
     controller.on("rebase", (data: any) => this.#applyFull(data.sessionId, data.entries, undefined, undefined, data.epoch));
     controller.on("entries", (data: any) => this.#applyDelta(data.sessionId, data.entries, data.epoch));
+    controller.on("page", (data: any) => this.#applyPage(data.sessionId, data.entries, data.history));
     controller.on("status", (data: any) => {
       const store = this.store(data.sessionId);
       const status: SessionStatus | null = data.status ?? null;
@@ -262,6 +274,24 @@ export class PinetConnection {
   compact(sessionId: string, instructions?: string): Promise<unknown> {
     return this.controller!.command(sessionId, "compact", instructions ? { instructions } : {});
   }
+
+  /**
+   * Fetch the next older page of transcript. No-op unless more exists and no
+   * request is already in flight, so it is safe to call from a scroll handler.
+   */
+  async loadOlder(sessionId: string): Promise<void> {
+    if (!this.controller) throw new Error("not connected");
+    const store = this.store(sessionId);
+    const state = store.get();
+    if (!state.attached || state.historyLoading || !state.historyHasMore || state.historyCursor === null) return;
+    store.set({ historyLoading: true });
+    try {
+      await this.controller.command(sessionId, "history", { before: state.historyCursor });
+    } catch (error) {
+      store.set({ historyLoading: false });
+      throw error;
+    }
+  }
   /** Model catalogue the host offers, cached briefly (it is acked, not streamed). */
   async listModels(sessionId: string, { refresh = false }: { refresh?: boolean } = {}): Promise<ModelInfo[]> {
     if (!this.controller) throw new Error("not connected");
@@ -325,7 +355,14 @@ export class PinetConnection {
     }
   }
 
-  #applyFull(sessionId: string, entries: unknown[], status?: SessionStatus, meta?: SessionMeta, epoch?: number): void {
+  #applyFull(
+    sessionId: string,
+    entries: unknown[],
+    status?: SessionStatus,
+    meta?: SessionMeta,
+    epoch?: number,
+    history?: { cursor?: number; hasMore?: boolean } | null,
+  ): void {
     const seen = new Set<string>();
     const mapped: DisplayEntry[] = [];
     for (const entry of (entries ?? []) as { id?: string }[]) {
@@ -337,7 +374,11 @@ export class PinetConnection {
     }
     const store = this.store(sessionId);
     // A full snapshot is exactly what a refetch was waiting for, so it is the
-    // authoritative place to clear `syncing` (deltas must not touch it).
+    // authoritative place to clear `syncing` (deltas must not touch it). A rebase
+    // arrives after compaction with the whole (shortened) transcript, so it also
+    // ends history paging.
+    const cursor = typeof history?.cursor === "number" ? history.cursor : null;
+    const hasMore = cursor !== null && Boolean(history?.hasMore);
     store.set((state) => ({
       entries: mapped,
       status: status ?? state.status,
@@ -345,7 +386,32 @@ export class PinetConnection {
       epoch: epoch ?? state.epoch,
       attached: true,
       syncing: false,
+      historyCursor: cursor,
+      historyHasMore: hasMore,
+      historyLoading: false,
     }));
+  }
+
+  /** Prepend an older page of history, skipping anything already held. */
+  #applyPage(sessionId: string, entries: unknown[], history?: { cursor?: number; hasMore?: boolean } | null): void {
+    const store = this.store(sessionId);
+    const known = new Set<string>();
+    const older: DisplayEntry[] = [];
+    for (const entry of (entries ?? []) as { id?: string }[]) {
+      if (!entry?.id) continue;
+      const record = describeEntry(entry) as DisplayEntry | null;
+      if (record) older.push(record);
+    }
+    store.set((state) => {
+      for (const entry of state.entries) if (entry.id) known.add(entry.id);
+      const fresh = older.filter((entry) => !entry.id || !known.has(entry.id));
+      return {
+        entries: fresh.length ? [...fresh, ...state.entries] : state.entries,
+        historyCursor: typeof history?.cursor === "number" ? history.cursor : null,
+        historyHasMore: Boolean(history?.hasMore),
+        historyLoading: false,
+      };
+    });
   }
 
   #applyDelta(sessionId: string, entries: unknown[], epoch?: number): void {

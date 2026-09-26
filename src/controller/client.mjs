@@ -63,7 +63,7 @@ export class PinetController extends Emitter {
 
     socket.on("e2e.key", (data) => this.#enqueue(() => this.#onKey(data)));
     socket.on("ctl.attached", (data) => this.#rememberHost(data));
-    for (const type of ["session.snapshot", "session.rebase", "session.entries", "session.status", "session.meta"]) {
+    for (const type of ["session.snapshot", "session.rebase", "session.entries", "session.page", "session.status", "session.meta"]) {
       socket.on(type, (data, msg) => this.#enqueue(() => this.#onFrame(type, data, msg)));
     }
     socket.on("session.removed", (data) => this.emit("removed", data));
@@ -278,6 +278,7 @@ export class PinetController extends Emitter {
       this.emit("snapshot", event);
     } else if (type === "session.rebase") this.emit("rebase", event);
     else if (type === "session.entries") this.emit("entries", event);
+    else if (type === "session.page") this.emit("page", event);
     else if (type === "session.status") this.emit("status", event);
     else if (type === "session.meta") this.emit("meta", event);
   }

@@ -219,6 +219,7 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
       case "session.snapshot":
       case "session.rebase":
       case "session.entries":
+      case "session.page":
       case "session.status":
       case "session.meta": {
         const sessionId = route.sessionId ?? data.sessionId;

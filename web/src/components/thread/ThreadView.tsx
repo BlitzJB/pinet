@@ -74,6 +74,7 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
   const state = useSessionState(sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
+  const [atTop, setAtTop] = useState(false);
   const refreshing = useDelayedTrue(Boolean(state.syncing), 250);
 
   useEffect(() => {
@@ -124,26 +125,47 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
     estimateSize: () => 120,
     overscan: 8,
     getItemKey,
+    // Chat semantics: anchor to the end so a prepended page of older history
+    // keeps the message you are reading in place, and follow appends while
+    // parked at the bottom.
+    anchorTo: "end",
+    followOnAppend: true,
+    scrollEndThreshold: 80,
   });
   const virtualItems = virtualizer.getVirtualItems();
   const totalSize = virtualizer.getTotalSize();
 
-  // Keep the view pinned to the newest message while the user is at the bottom.
-  // Re-runs when measured heights settle so a growing thread stays anchored.
+  // Start at the newest message on first paint of a session.
+  const started = useRef(false);
   useLayoutEffect(() => {
-    if (!atBottom) return;
-    const element = scrollRef.current;
-    if (element) element.scrollTop = element.scrollHeight;
-  }, [state.entries.length, atBottom, totalSize]);
+    if (started.current || state.entries.length === 0) return;
+    started.current = true;
+    virtualizer.scrollToEnd();
+  }, [state.entries.length, virtualizer]);
 
-  const scrollToBottom = useCallback((smooth: boolean) => {
-    const element = scrollRef.current;
-    if (!element) return;
-    element.scrollTo({ top: element.scrollHeight, behavior: smooth ? "smooth" : "auto" });
-    setAtBottom(true);
-  }, []);
+  const loadOlder = useCallback(() => {
+    if (!state.historyHasMore || state.historyLoading) return;
+    void connection.loadOlder(sessionId).catch(() => {});
+  }, [connection, sessionId, state.historyHasMore, state.historyLoading]);
+
+  const scrollToBottom = useCallback(
+    (smooth: boolean) => {
+      virtualizer.scrollToEnd({ behavior: smooth ? "smooth" : "auto" });
+      setAtBottom(true);
+    },
+    [virtualizer],
+  );
 
   const empty = state.entries.length === 0;
+  // One slot at the top of the thread: a refetch, an older-history fetch, or the
+  // end-of-history marker once the user has scrolled all the way back.
+  const topNotice = refreshing
+    ? "Refreshing…"
+    : state.historyLoading
+      ? "Loading earlier messages…"
+      : atTop && !state.historyHasMore && !empty
+        ? "Start of conversation"
+        : null;
 
   return (
     <div className="relative flex h-full flex-col">
@@ -151,23 +173,29 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
       <div className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center px-4">
         <div
           role="status"
-          aria-hidden={!refreshing}
+          aria-hidden={!topNotice}
           className={cn(
             "flex items-center gap-2 rounded-full border border-border/60 bg-background/85 px-3 py-1.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur transition-opacity duration-200 motion-reduce:transition-none",
-            refreshing ? "opacity-100" : "opacity-0",
+            topNotice ? "opacity-100" : "opacity-0",
           )}
         >
-          <Loader2Icon className="size-3 animate-spin motion-reduce:animate-none" />
-          Refreshing…
+          {topNotice !== "Start of conversation" && (
+            <Loader2Icon className="size-3 animate-spin motion-reduce:animate-none" />
+          )}
+          {topNotice ?? "Refreshing…"}
         </div>
       </div>
 
       <div className="relative min-h-0 flex-1">
         <div
           ref={scrollRef}
+          data-slot="transcript"
           onScroll={(event) => {
             const element = event.currentTarget;
             setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 40);
+            // Approaching the top: pull the previous page in.
+            if (element.scrollTop < 400) loadOlder();
+            setAtTop(element.scrollTop < 24);
           }}
           className="h-full overflow-y-auto"
         >
