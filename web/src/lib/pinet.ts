@@ -188,7 +188,7 @@ export class PiNetConnection {
     });
     controller.on("resync_error", (data: any) => this.store(data.sessionId).set({ syncing: false }));
     controller.on("snapshot", (data: any) => this.#applyFull(data.sessionId, data.entries, data.status, data.meta, data.epoch, data.history));
-    controller.on("rebase", (data: any) => this.#applyFull(data.sessionId, data.entries, undefined, undefined, data.epoch));
+    controller.on("rebase", (data: any) => this.#applyFull(data.sessionId, data.entries, undefined, undefined, data.epoch, data.history));
     controller.on("entries", (data: any) => this.#applyDelta(data.sessionId, data.entries, data.epoch));
     controller.on("page", (data: any) => this.#applyPage(data.sessionId, data.entries, data.history));
     controller.on("status", (data: any) => {
@@ -375,8 +375,8 @@ export class PiNetConnection {
     const store = this.store(sessionId);
     // A full snapshot is exactly what a refetch was waiting for, so it is the
     // authoritative place to clear `syncing` (deltas must not touch it). A rebase
-    // arrives after compaction with the whole (shortened) transcript, so it also
-    // ends history paging.
+    // (compaction, branch switch) arrives with the same windowed shape as a
+    // snapshot, so it re-anchors paging too instead of bypassing it.
     const cursor = typeof history?.cursor === "number" ? history.cursor : null;
     const hasMore = cursor !== null && Boolean(history?.hasMore);
     store.set((state) => ({

@@ -63,7 +63,22 @@ export default function pinet(pi: Pi): void {
   const queue = createSerialQueue();
   let currentRun: { id: string; startedAt: number } | undefined;
   let compacting: { reason: string } | undefined;
+  let compactingSince = 0;
   let runCounter = 0;
+
+  // pi emits `session_compact` while its run loop is still settling, so a status
+  // read there reports "running" even though no run is in flight. Status is
+  // otherwise only pushed on a fixed set of events, so nothing would ever correct
+  // it and the controller would show a status line forever (the bug we hit:
+  // compaction completed, the indicator kept spinning). So nudge status until pi
+  // reports idle, and keep a slow heartbeat for the life of any run so a dropped
+  // frame cannot strand the UI either. Intervals are env-tunable for tests.
+  const SETTLE_MS = Number(process.env.PINET_STATUS_SETTLE_MS ?? 750);
+  const SETTLE_MAX_MS = Number(process.env.PINET_STATUS_SETTLE_MAX_MS ?? 45_000);
+  const HEARTBEAT_MS = Number(process.env.PINET_STATUS_HEARTBEAT_MS ?? 10_000);
+  const COMPACT_STALE_MS = Number(process.env.PINET_COMPACT_STALE_MS ?? 900_000);
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
   // Session spawner (see src/host/spawner.mjs). `PINET_SPAWN_MODE=off` disables it.
   const spawner = new SessionSpawner({
@@ -155,21 +170,102 @@ export default function pinet(pi: Pi): void {
     };
   }
 
+  /** Publish the live status once (no-op without a session). */
+  function publishStatus(): void {
+    const ctx = activeCtx;
+    if (!ctx) return;
+    safe(() => bridge?.publishStatus(buildStatus(ctx)));
+  }
+
+  function setCompacting(next: { reason: string } | undefined): void {
+    compacting = next;
+    compactingSince = next ? Date.now() : 0;
+  }
+
+  function stopStatusHeartbeat(): void {
+    if (!heartbeatTimer) return;
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = undefined;
+  }
+
+  /**
+   * Re-publish status every few seconds while a run or compaction is in flight.
+   * It stops as soon as pi is idle, so an idle session stays silent; the point is
+   * that a controller can never be left holding a stale "running" forever.
+   */
+  function startStatusHeartbeat(): void {
+    if (heartbeatTimer) return;
+    heartbeatTimer = setInterval(() => {
+      // A compaction flag that outlives any plausible summarization means the
+      // matching `session_compact*` event never arrived: stop reporting it.
+      if (compacting && Date.now() - compactingSince > COMPACT_STALE_MS) setCompacting(undefined);
+      const ctx = activeCtx;
+      if (!ctx || (ctx.isIdle() && !compacting)) {
+        stopStatusHeartbeat();
+        publishStatus();
+        return;
+      }
+      publishStatus();
+    }, HEARTBEAT_MS);
+    heartbeatTimer.unref?.();
+  }
+
+  /**
+   * Re-publish status until pi reports idle. `session_compact` fires before the
+   * run loop settles, so the status published there can still say "running";
+   * without this the controller has no way to learn otherwise.
+   */
+  function settleStatus(): void {
+    if (settleTimer) clearTimeout(settleTimer);
+    const deadline = Date.now() + SETTLE_MAX_MS;
+    const tick = (): void => {
+      settleTimer = undefined;
+      publishStatus();
+      const ctx = activeCtx;
+      if (!ctx || (ctx.isIdle() && !compacting) || Date.now() > deadline) return;
+      settleTimer = setTimeout(tick, SETTLE_MS);
+      settleTimer.unref?.();
+    };
+    settleTimer = setTimeout(tick, SETTLE_MS);
+    settleTimer.unref?.();
+  }
+
   // Transcript paging: a long session (multi-MB JSONL) must not be shipped in one
   // snapshot. See src/host/history.mjs for the window arithmetic.
+  function windowed(entries: Json[], limit = INITIAL_ENTRY_LIMIT): { entries: Json[]; history: Json } {
+    const window = historyWindow(entries.length, entries.length, limit);
+    return {
+      entries: entries.slice(window.start, window.end),
+      history: { cursor: window.cursor, hasMore: window.hasMore, total: window.total },
+    };
+  }
+
   function snapshot(ctx: ExtensionContext): Json {
     const entries = ctx.sessionManager.getEntries() as unknown as Json[];
     // `sentIds` still tracks every entry so delta sync stays exact; only the
     // frame is trimmed to the tail.
     sentIds = entries.map((entry) => String(entry.id));
-    const window = historyWindow(entries.length, entries.length, INITIAL_ENTRY_LIMIT);
+    const { entries: tail, history } = windowed(entries);
     return {
-      entries: entries.slice(window.start, window.end),
-      history: { cursor: window.cursor, hasMore: window.hasMore, total: window.total },
+      entries: tail,
+      history,
       status: buildStatus(ctx),
       meta: buildMeta(ctx),
       leafId: ctx.sessionManager.getLeafId() ?? null,
     };
+  }
+
+  /**
+   * A rebase replaces the controller's transcript wholesale (compaction, branch
+   * switch, history rewrite). It ships the same windowed shape as a snapshot so
+   * it can neither re-inflate a multi-MB session nor bypass paging: a compaction
+   * of a 9 MB session used to fan out all 2533 raw entries.
+   */
+  function publishRebase(ctx: ExtensionContext): void {
+    const entries = ctx.sessionManager.getEntries() as unknown as Json[];
+    sentIds = entries.map((entry) => String(entry.id));
+    const { entries: tail, history } = windowed(entries);
+    safe(() => bridge?.publishRebase(tail, history, ctx.sessionManager.getLeafId() ?? null));
   }
 
   function syncEntries(ctx: ExtensionContext): void {
@@ -185,8 +281,7 @@ export default function pinet(pi: Pi): void {
       }
     }
     if (rewrite) {
-      sentIds = entries.map((entry) => String(entry.id));
-      safe(() => bridge?.publishRebase(entries, ctx.sessionManager.getLeafId() ?? null));
+      publishRebase(ctx);
       return;
     }
     const seen = new Set(sentIds);
@@ -507,6 +602,9 @@ export default function pinet(pi: Pi): void {
   pi.on("session_shutdown", async () => {
     safe(() => bridge?.closeSession("shutdown"));
     spawner.shutdown();
+    stopStatusHeartbeat();
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = undefined;
     activeCtx = undefined;
     sessionId = undefined;
     sentIds = [];
@@ -530,6 +628,7 @@ export default function pinet(pi: Pi): void {
   pi.on("tool_execution_start", async (event, ctx) => {
     adopt(ctx);
     runningTools.set(event.toolCallId, { toolName: event.toolName, args: event.args });
+    startStatusHeartbeat();
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
@@ -544,6 +643,7 @@ export default function pinet(pi: Pi): void {
     adopt(ctx);
     runCounter += 1;
     currentRun = { id: `run_${Date.now().toString(36)}_${runCounter.toString(36)}`, startedAt: Date.now() };
+    startStatusHeartbeat();
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
@@ -572,26 +672,29 @@ export default function pinet(pi: Pi): void {
 
   pi.on("session_before_compact", async (event, ctx) => {
     adopt(ctx);
-    compacting = { reason: event.reason ?? "manual" };
+    setCompacting({ reason: event.reason ?? "manual" });
+    startStatusHeartbeat();
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
   });
 
   pi.on("session_compact", async (_event, ctx) => {
     adopt(ctx);
-    compacting = undefined;
-    safe(() => bridge?.publishRebase(ctx.sessionManager.getEntries() as unknown as Json[], ctx.sessionManager.getLeafId() ?? null));
+    setCompacting(undefined);
+    publishRebase(ctx);
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
+    settleStatus();
   });
 
   pi.on("session_compact_failed", async (_event, ctx) => {
     adopt(ctx);
-    compacting = undefined;
+    setCompacting(undefined);
     safe(() => bridge?.publishStatus(buildStatus(ctx)));
+    settleStatus();
   });
 
   pi.on("session_tree", async (_event, ctx) => {
     adopt(ctx);
-    safe(() => bridge?.publishRebase(ctx.sessionManager.getEntries() as unknown as Json[], ctx.sessionManager.getLeafId() ?? null));
+    publishRebase(ctx);
   });
 
   void autoStart();

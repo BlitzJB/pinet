@@ -132,8 +132,8 @@ export class HostBridge extends EventEmitter {
     this.#publish("session.entries", { entries });
   }
 
-  publishRebase(entries, leafId = null) {
-    this.#publish("session.rebase", { entries, leafId });
+  publishRebase(entries, history = null, leafId = null) {
+    this.#publish("session.rebase", { entries, history, leafId });
   }
 
   publishStatus(status) {

@@ -9,12 +9,15 @@ import { enrollDevice, makeAccount, startCoordinator, waitFor } from "../helpers
 const SESSION = "s_hostext";
 
 // pi hands a *fresh* context object to each handler; reproduce that here.
-function makeCtx(store) {
+function makeCtx(store, options = {}) {
+  // A mutable box so a test can flip pi's idleness without another event firing,
+  // which is exactly how the run loop settles after a compaction.
+  const idle = options.idle ?? { value: true };
   return {
     cwd: "/tmp",
     model: { provider: "test", id: "m", name: "m" },
     thinkingLevel: "off",
-    isIdle: () => true,
+    isIdle: () => idle.value,
     getContextUsage: () => null,
     scopedModels: [],
     modelRegistry: {
@@ -74,6 +77,121 @@ afterEach(async () => {
   delete process.env.PINET_HUB;
   delete process.env.PINET_HTTP;
   delete process.env.PINET_SPAWN_MODE;
+  delete process.env.PINET_STATUS_SETTLE_MS;
+  delete process.env.PINET_STATUS_SETTLE_MAX_MS;
+  delete process.env.PINET_STATUS_HEARTBEAT_MS;
+  delete process.env.PINET_COMPACT_STALE_MS;
+});
+
+// --- shared setup for the status/compaction tests ---------------------------
+
+/** Attach a controller to a host extension whose pi context the test controls. */
+async function attachHostTest(name, entries = []) {
+  const enrolled = enrollDevice(coord.accounts, account.id, "host", name);
+  writeFileSync(
+    join(dir, "host.json"),
+    JSON.stringify({ hostId: enrolled.device.id, identity: enrolled.identity, encryption: enrolled.encryption }),
+  );
+  process.env.PINET_DIR = dir;
+  process.env.PINET_HUB = coord.url;
+  process.env.PINET_HTTP = coord.httpUrl;
+
+  const pi = fakePi();
+  hostExtension(pi);
+  const idle = { value: true };
+  const store = { entries };
+  await pi.handlers.session_start[0]({}, makeCtx(store, { idle }));
+
+  const ctl = enrollDevice(coord.accounts, account.id, "controller", `${name}-ctl`);
+  const controller = new PiNetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
+  await controller.connect();
+  for (let i = 0; i < 120; i += 1) {
+    if ((await controller.list()).some((session) => session.sessionId === SESSION)) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const snapshot = waitFor(controller, "snapshot", () => true, 10_000);
+  await controller.attach(SESSION, "control");
+  await snapshot;
+  return { pi, controller, store, idle };
+}
+
+/** Resolve with the first status frame whose payload satisfies `predicate`. */
+async function waitForStatus(controller, predicate, timeoutMs = 5000) {
+  const data = await waitFor(controller, "status", (frame) => predicate(frame.status), timeoutMs);
+  return data.status;
+}
+
+describe("host extension run state", () => {
+  const entries500 = () =>
+    Array.from({ length: 500 }, (_, i) => ({
+      type: "message",
+      id: `c${i}`,
+      parentId: i ? `c${i - 1}` : null,
+      message: { role: "user", content: `m ${i}` },
+    }));
+
+  it("settles the run state after a compaction finishes", async () => {
+    // pi emits `session_compact` while the run loop is still settling, so the
+    // status published there still says "running" even though no run is in
+    // flight. Nothing else ever publishes, so the host has to keep nudging status
+    // until pi is idle — otherwise the controller shows a status line forever
+    // (this was a real report: compaction completed, the indicator kept spinning).
+    process.env.PINET_STATUS_SETTLE_MS = "30";
+    process.env.PINET_STATUS_SETTLE_MAX_MS = "3000";
+    const { pi, controller, store, idle } = await attachHostTest("settle", entries500());
+
+    idle.value = false;
+    await pi.handlers.session_before_compact[0]({ reason: "manual" }, makeCtx(store, { idle }));
+    expect(await waitForStatus(controller, (s) => Boolean(s?.compacting))).toMatchObject({
+      compacting: { reason: "manual" },
+    });
+
+    await pi.handlers.session_compact[0]({ reason: "manual" }, makeCtx(store, { idle }));
+    const cleared = await waitForStatus(controller, (s) => s?.compacting === null);
+    // The flag clears, but pi has not settled yet: this is the state the old code
+    // stopped at, leaving the indicator up with nothing left to correct it.
+    expect(cleared.isIdle).toBe(false);
+
+    // pi finishes settling with no further event: the host must notice on its own.
+    idle.value = true;
+    expect((await waitForStatus(controller, (s) => s?.isIdle === true)).isIdle).toBe(true);
+    controller.close();
+  });
+
+  it("re-anchors paging with a windowed rebase instead of shipping everything", async () => {
+    // A rebase used to fan out every raw entry: compacting a 9 MB session pushed
+    // 2533 entries / 9.2 MB at the controller and silently undid paging.
+    const { pi, controller, store } = await attachHostTest("rebase", entries500());
+    const rebase = waitFor(controller, "rebase", () => true, 10_000);
+    await pi.handlers.session_compact[0]({ reason: "manual" }, makeCtx(store));
+    const frame = await rebase;
+    expect(frame.entries).toHaveLength(200);
+    expect(frame.entries.at(-1).id).toBe("c499");
+    expect(frame.history).toMatchObject({ cursor: 300, hasMore: true, total: 500 });
+    controller.close();
+  });
+
+  it("heartbeats status while a run is in flight and goes quiet when idle", async () => {
+    // Status only travels on host frames, so a run that publishes nothing for
+    // minutes (a long generation) or whose frame is lost would strand the UI.
+    process.env.PINET_STATUS_HEARTBEAT_MS = "40";
+    const { pi, controller, store, idle } = await attachHostTest("heartbeat", []);
+    const seen = [];
+    controller.on("status", (data) => seen.push(data.status));
+
+    idle.value = false;
+    await pi.handlers.agent_start[0]({}, makeCtx(store, { idle }));
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    expect(seen.filter((s) => s?.isIdle === false).length).toBeGreaterThanOrEqual(2);
+
+    idle.value = true;
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    expect(seen.at(-1)?.isIdle).toBe(true);
+    const count = seen.length;
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    expect(seen.length).toBe(count); // silent once idle
+    controller.close();
+  });
 });
 
 describe("host extension delta streaming", () => {
