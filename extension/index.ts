@@ -782,6 +782,10 @@ export default function pinet(pi: Pi): void {
   function startVoiceBridge(): void {
     if (!voicePipeline?.enabled) return;
     bridge?.onAudio(({ index, data }) => {
+      // Chunk 0 starts a new take: the browser must not have to make a round trip
+      // before capturing (that would consume its user-gesture window), so the
+      // reset happens here instead of on a `voice.start` command.
+      if (index === 0) audioChunks = [];
       if (audioChunks.length >= MAX_AUDIO_CHUNKS) return;
       audioChunks.push({ index, data });
     });

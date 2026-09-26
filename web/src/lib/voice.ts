@@ -82,6 +82,114 @@ export interface VoiceRecorder {
   stop(): Promise<void>;
 }
 
+/** A capture failure with enough context to tell the user what to do about it. */
+export class MicError extends Error {
+  readonly info: MicErrorInfo;
+
+  constructor(info: MicErrorInfo) {
+    super(info.message);
+    this.name = "MicError";
+    this.info = info;
+  }
+}
+
+export interface MicErrorInfo {
+  /** What went wrong, in one line. */
+  message: string;
+  /** What the user can do about it. */
+  hint: string;
+  /** Raw detail (error name, permission state, secure context) for a tooltip. */
+  detail: string;
+}
+
+const isPermissionError = (error: unknown): boolean => {
+  const name = (error as { name?: string })?.name;
+  return name === "NotAllowedError" || name === "SecurityError";
+};
+
+/** The browser's remembered decision, when it will tell us. */
+export async function micPermissionState(): Promise<PermissionState | "unknown"> {
+  try {
+    return (await navigator.permissions.query({ name: "microphone" as PermissionName })).state;
+  } catch {
+    return "unknown";
+  }
+}
+
+export async function micDevices(): Promise<string[]> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((device) => device.kind === "audioinput").map((device) => device.label || "(unlabelled until granted)");
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A denied microphone has three quite different causes, and they need different
+ * fixes, so this separates them instead of reporting "permission denied" for all
+ * of them:
+ *
+ *   1. the browser remembers a block for this origin (permission === "denied")
+ *   2. the site is allowed but the *OS* is blocking the browser/app
+ *   3. the device is missing, busy, or cannot satisfy the constraints
+ */
+export function micErrorInfo(error: unknown, permission: PermissionState | "unknown" = "unknown"): MicErrorInfo {
+  const name = (error as { name?: string })?.name ?? "Error";
+  const secure = typeof isSecureContext === "boolean" ? String(isSecureContext) : "unknown";
+  const detail = `${name}: ${(error as { message?: string })?.message ?? ""} (permission=${permission}, secureContext=${secure})`;
+
+  if (isPermissionError(error)) {
+    if (permission === "denied") {
+      return {
+        message: "The browser is blocking the microphone for this site",
+        hint: "Click the mic icon in the address bar → Microphone → Allow, then reload.",
+        detail,
+      };
+    }
+    return {
+      message: "Something outside the page is blocking the microphone",
+      hint: "The site is allowed, so the operating system is refusing it: enable your browser (or this installed app) in System Settings → Privacy & Security → Microphone, then restart it. On iOS: Settings → Safari → Microphone.",
+      detail,
+    };
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return { message: "No microphone found", hint: "Connect an input device and reload.", detail };
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return { message: "The microphone is in use by another app", hint: "Close whatever else is recording and try again.", detail };
+  }
+  if (name === "OverconstrainedError") {
+    return { message: "This microphone does not support the requested settings", hint: "Try again — the recorder falls back to the loosest possible request.", detail };
+  }
+  return { message: "Could not start recording", hint: "Reload the page and try again.", detail };
+}
+
+/**
+ * Open the input stream.
+ *
+ * Every constraint is an `ideal`, never an exact, value: a bare value in a
+ * MediaTrackConstraints dictionary means `exact`, so `channelCount: 1` makes a
+ * stereo-only input fail outright. If the preferred set still fails — and not
+ * because of a permission decision — fall back to the loosest possible request
+ * before giving up, since capture only ever reads the first channel anyway.
+ */
+async function openInputStream(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: { ideal: 1 },
+        echoCancellation: { ideal: true },
+        noiseSuppression: { ideal: true },
+        autoGainControl: { ideal: true },
+      },
+    });
+  } catch (error) {
+    if (isPermissionError(error)) throw error;
+    return navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+}
+
 export interface RecorderOptions {
   onChunk: (chunkBase64: string, index: number) => void;
   onError?: (message: string) => void;
@@ -101,12 +209,9 @@ export async function startVoiceRecorder({ onChunk, onError, onLevel }: Recorder
 
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
+    stream = await openInputStream();
   } catch (error) {
-    const name = (error as { name?: string })?.name;
-    throw new Error(name === "NotAllowedError" ? "Microphone permission was denied" : "No microphone available");
+    throw new MicError(micErrorInfo(error, await micPermissionState()));
   }
 
   const context = new AudioContext();

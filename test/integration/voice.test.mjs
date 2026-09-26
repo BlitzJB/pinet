@@ -139,4 +139,44 @@ describe("voice dictation", () => {
     expect(provider.calls.chatBody.messages[0].content).toContain("PiNet");
     controller.close();
   }, 30_000);
+  it("treats chunk index 0 as the start of a new take", async () => {
+    // The browser captures before it can talk to the host (a network round trip
+    // would eat its user-gesture window), so the buffer reset rides on chunk 0
+    // instead of a `voice.start` command.
+    const base = await provider.listen();
+    process.env.PINET_DIR = dir;
+    process.env.PINET_HUB = coord.url;
+    process.env.PINET_HTTP = coord.httpUrl;
+    process.env.GROQ_API_KEY = "test-key";
+    process.env.PINET_VOICE_ASR_URL = base;
+    process.env.PINET_VOICE_LLM_URL = base;
+
+    const enrolled = enrollDevice(coord.accounts, account.id, "host", "voice-reset");
+    writeFileSync(join(dir, "host.json"), JSON.stringify({ hostId: enrolled.device.id, identity: enrolled.identity, encryption: enrolled.encryption }));
+    const pi = fakePi();
+    hostExtension(pi);
+    await pi.handlers.session_start[0]({}, makeCtx({ entries: [] }));
+
+    const ctl = enrollDevice(coord.accounts, account.id, "controller", "voice-reset-ctl");
+    const controller = new PiNetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
+    await controller.connect();
+    for (let i = 0; i < 120; i += 1) {
+      if ((await controller.list()).some((s) => s.sessionId === SESSION)) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const snapshot = waitFor(controller, "snapshot", () => true, 10_000);
+    await controller.attach(SESSION, "control");
+    await snapshot;
+
+    // One second of audio, twice under index 0 (two takes, no voice.start).
+    const second = Buffer.alloc(32_000, 1);
+    await controller.sendAudio(SESSION, second.toString("base64"), 0);
+    await controller.sendAudio(SESSION, second.toString("base64"), 0);
+    const voice = waitFor(controller, "voice", () => true, 15_000);
+    await controller.command(SESSION, "voice.end", {});
+
+    // 1s, not 2s: the second index-0 chunk replaced the first take.
+    expect((await voice).durationMs).toBe(1000);
+    controller.close();
+  }, 30_000);
 });

@@ -271,7 +271,6 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
             onThinking={(level) => void connection.setThinking(sessionId, level).catch(() => {})}
             voiceEnabled={Boolean(state.meta?.voice?.enabled)}
             voice={state.voice}
-            onVoiceStart={() => void connection.startVoice(sessionId).catch(() => {})}
             onVoiceChunk={(chunk, index) => connection.sendVoiceChunk(sessionId, chunk, index)}
             onVoiceEnd={() => void connection.endVoice(sessionId).catch(() => {})}
             onVoiceCancel={() => void connection.cancelVoice(sessionId).catch(() => {})}

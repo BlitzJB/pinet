@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUpIcon, BrainIcon, ChevronDownIcon, LoaderIcon, MicIcon, Minimize2Icon, SquareIcon, Undo2Icon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ModelInfo, VoiceResult } from "../../lib/pinet";
-import { startVoiceRecorder, type VoiceRecorder } from "../../lib/voice";
+import { startVoiceRecorder, MicError, micDevices, micPermissionState, voiceSupported, type MicErrorInfo, type VoiceRecorder } from "../../lib/voice";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ghostButton, iconSwap, iconSwapIn, iconSwapOut, paper } from "../ui/surfaces";
@@ -28,7 +28,6 @@ export function Composer({
   onStop,
   onCompact,
   onThinking,
-  onVoiceStart,
   onVoiceChunk,
   onVoiceEnd,
   onVoiceCancel,
@@ -52,7 +51,6 @@ export function Composer({
   onStop: () => void;
   onCompact: () => void;
   onThinking: (level: string) => void;
-  onVoiceStart?: () => void | Promise<void>;
   onVoiceChunk?: (chunk: string, index: number) => void | Promise<void>;
   onVoiceEnd?: () => void | Promise<void>;
   onVoiceCancel?: () => void | Promise<void>;
@@ -66,6 +64,7 @@ export function Composer({
   const [elapsed, setElapsed] = useState(0);
   const [polishing, setPolishing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [micError, setMicError] = useState<(MicErrorInfo & { devices?: string[] }) | null>(null);
   const [insertion, setInsertion] = useState<{ start: number; end: number; at: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recorderRef = useRef<VoiceRecorder | null>(null);
@@ -90,20 +89,46 @@ export function Composer({
   async function startRecording() {
     if (!voiceEnabled || recording || polishing) return;
     setNotice(null);
+    setMicError(null);
     try {
-      await onVoiceStart?.();
-      recorderRef.current = await startVoiceRecorder({
+      // Capture first, always. getUserMedia has to run inside the click's gesture
+      // window, and awaiting a round trip to the host here would consume it —
+      // Safari then rejects with NotAllowedError, which is indistinguishable from
+      // a real permission denial. No host call is needed before capture: the host
+      // resets its buffer when chunk index 0 of a new take arrives.
+      const recorder = await startVoiceRecorder({
         onChunk: (chunk, index) => {
           void onVoiceChunk?.(chunk, index);
         },
         onError: (message) => setNotice(message),
         onLevel: setLevel,
       });
+      recorderRef.current = recorder;
       setElapsed(0);
       setRecording(true);
     } catch (error) {
+      if (error instanceof MicError) {
+        // Include the input devices so a "no microphone" report is verifiable.
+        setMicError({ ...error.info, devices: await micDevices() });
+        return;
+      }
       setNotice(String((error as Error)?.message ?? error));
     }
+  }
+
+  /** Re-read the permission state after the user has changed a browser or OS setting. */
+  async function recheckMicrophone() {
+    setMicError(null);
+    const permission = await micPermissionState();
+    if (permission === "denied") {
+      setMicError({
+        message: "Still blocked for this site",
+        hint: "Click the mic icon in the address bar → Microphone → Allow, then reload the page. A reload alone does not clear a remembered block.",
+        detail: `permission=${permission}`,
+      });
+      return;
+    }
+    await startRecording();
   }
 
   async function stopRecording({ cancel = false }: { cancel?: boolean } = {}) {
@@ -286,7 +311,7 @@ export function Composer({
         </div>
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
-          {(recording || polishing || notice || insertion) && (
+          {(recording || polishing || notice || insertion || micError) && (
             <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/70" role="status" aria-live="polite">
               {recording && (
                 <span className="flex items-center gap-1.5">
@@ -302,6 +327,19 @@ export function Composer({
               )}
               {!recording && polishing && <span className="truncate">Polishing…</span>}
               {!recording && !polishing && notice && <span className="max-w-[16rem] truncate">{notice}</span>}
+              {!recording && !polishing && micError && (
+                <span className="flex min-w-0 items-center gap-1.5" title={`${micError.hint}\n\n${micError.detail}${micError.devices?.length ? `\ninputs: ${micError.devices.join(", ")}` : "\ninputs: none reported"}`}>
+                  <span className="truncate text-amber-500">{micError.message}</span>
+                  <button
+                    type="button"
+                    onClick={() => void recheckMicrophone()}
+                    className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] text-muted-foreground underline decoration-dotted transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+                    title={micError.hint}
+                  >
+                    Recheck
+                  </button>
+                </span>
+              )}
               {!recording && !polishing && insertion && (
                 <button
                   type="button"
@@ -315,7 +353,7 @@ export function Composer({
               )}
             </span>
           )}
-          {voiceEnabled && (
+          {voiceEnabled && voiceSupported() && (
             <button
               type="button"
               aria-label={recording ? "Stop dictation" : "Dictate"}
