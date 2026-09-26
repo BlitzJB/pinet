@@ -31,7 +31,7 @@ const commandSignature = await p.sign(
 
 const fixture = {
   version: 1,
-  note: "Pinet client conformance vectors. Any client implementation must verify/decrypt these.",
+  note: "PiNet client conformance vectors. Any client implementation must verify/decrypt these.",
   serverId,
   deviceId,
   role,

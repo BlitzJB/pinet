@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startMockGoogleIdp } from "../../src/auth/google.mjs";
 import { createCoordinator } from "../../src/coordinator/server.mjs";
-import { PinetSocket } from "../../src/common/ws-client.mjs";
+import { PiNetSocket } from "../../src/common/ws-client.mjs";
 import { totp } from "../../src/crypto/totp.mjs";
 import { generateEd25519, generateX25519 } from "../../src/crypto/keys.mjs";
 
@@ -110,7 +110,7 @@ describe("HTTP auth surface", () => {
     const { deviceId } = await registered.json();
     expect(deviceId).toMatch(/^dev_/u);
 
-    const socket = new PinetSocket(coord.wsUrl);
+    const socket = new PiNetSocket(coord.wsUrl);
     const auth = await socket.connect({ role: "controller", deviceId, identityPrivateKey: identity.privateKey });
     expect(auth).toMatchObject({ deviceId, role: "controller" });
     socket.close();

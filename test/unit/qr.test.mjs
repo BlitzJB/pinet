@@ -3,7 +3,7 @@ import { qrSvg } from "../../src/coordinator/qr.mjs";
 
 describe("qrSvg", () => {
   it("renders an inline SVG for an otpauth link", () => {
-    const svg = qrSvg("otpauth://totp/Pinet:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Pinet");
+    const svg = qrSvg("otpauth://totp/PiNet:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=PiNet");
     expect(svg.startsWith("<svg")).toBe(true);
     expect(svg).toContain("</svg>");
     expect(svg).toContain("<path");

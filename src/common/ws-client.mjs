@@ -9,7 +9,7 @@
 import { canonicalJson } from "./canonical.mjs";
 import { Emitter } from "./emitter.mjs";
 
-export class PinetSocket extends Emitter {
+export class PiNetSocket extends Emitter {
   constructor(url, { crypto, reconnect = false, minMs = 500, maxMs = 15_000, heartbeatMs = 20_000 } = {}) {
     super();
     this.url = url;

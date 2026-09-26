@@ -18,12 +18,12 @@ function InstallRow() {
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="min-w-0">
-        <p className="font-medium">Install Pinet</p>
+        <p className="font-medium">Install PiNet</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {done
-            ? "Pinet is installed on this device."
+            ? "PiNet is installed on this device."
             : available
-              ? "Add Pinet to your home screen for a full-screen, app-like experience."
+              ? "Add PiNet to your home screen for a full-screen, app-like experience."
               : "This browser doesn't offer app installation."}
         </p>
       </div>

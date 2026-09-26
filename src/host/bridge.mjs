@@ -4,7 +4,7 @@
 
 import { EventEmitter } from "node:events";
 import { canonicalJson } from "../common/canonical.mjs";
-import { PinetSocket } from "../common/ws-client.mjs";
+import { PiNetSocket } from "../common/ws-client.mjs";
 import { verify, sign } from "../crypto/keys.mjs";
 import { commandAad, frameAad, generateGroupKey, openJson, sealJson, wrapGroupKey } from "../crypto/e2e.mjs";
 
@@ -37,7 +37,7 @@ export class HostBridge extends EventEmitter {
   }
 
   async connect() {
-    const socket = new PinetSocket(this.url, { reconnect: true });
+    const socket = new PiNetSocket(this.url, { reconnect: true });
     this.socket = socket;
     socket.on("host.attach", (data) => this.#onAttach(data));
     socket.on("cmd.deliver", (data) => void this.#onCommand(data));

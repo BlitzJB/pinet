@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import hostExtension from "../../extension/index.ts";
-import { PinetController } from "../../src/controller/client.mjs";
+import { PiNetController } from "../../src/controller/client.mjs";
 import { enrollDevice, makeAccount, startCoordinator, waitFor } from "../helpers/harness.mjs";
 
 const SESSION = "s_hostext";
@@ -94,7 +94,7 @@ describe("host extension delta streaming", () => {
     await pi.handlers.session_start[0]({}, makeCtx(store));
 
     const ctl = enrollDevice(coord.accounts, account.id, "controller", "c");
-    const controller = new PinetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
+    const controller = new PiNetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
     await controller.connect();
 
     let sessionId;
@@ -131,7 +131,7 @@ describe("host extension delta streaming", () => {
     await pi.handlers.session_start[0]({}, makeCtx({ entries: [] }));
 
     const ctl = enrollDevice(coord.accounts, account.id, "controller", `${name}-ctl`);
-    const controller = new PinetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
+    const controller = new PiNetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
     await controller.connect();
     if (waitForSession) {
       for (let i = 0; i < 120; i += 1) {
@@ -212,7 +212,7 @@ describe("host extension delta streaming", () => {
     await pi.handlers.session_start[0]({}, makeCtx({ entries }));
 
     const ctl = enrollDevice(coord.accounts, account.id, "controller", "paging-ctl");
-    const controller = new PinetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
+    const controller = new PiNetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
     await controller.connect();
 
     const snapshot = waitFor(controller, "snapshot", () => true, 10_000);

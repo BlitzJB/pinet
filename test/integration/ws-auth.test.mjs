@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { canonicalJson } from "../../src/common/canonical.mjs";
-import { PinetSocket } from "../../src/common/ws-client.mjs";
+import { PiNetSocket } from "../../src/common/ws-client.mjs";
 import { generateEd25519, sign } from "../../src/crypto/keys.mjs";
 import { enrollDevice, makeAccount, startCoordinator } from "../helpers/harness.mjs";
 
@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 function connectOnce({ role, deviceId, privateKey }) {
-  const socket = new PinetSocket(coord.url);
+  const socket = new PiNetSocket(coord.url);
   return socket.connect({ role, deviceId, identityPrivateKey: privateKey, timeoutMs: 3000 });
 }
 
@@ -120,7 +120,7 @@ describe("browser session vs controller device account", () => {
       const owner = makeAccount(coord2.accounts, "owner@example.com");
       const other = makeAccount(coord2.accounts, "other@example.com");
       const { device, identity } = enrollDevice(coord2.accounts, owner.id, "controller", "browser");
-      const socket = new PinetSocket(coord2.url);
+      const socket = new PiNetSocket(coord2.url);
       await expect(
         socket.connect({
           role: "controller",
@@ -133,7 +133,7 @@ describe("browser session vs controller device account", () => {
       socket.close();
 
       // Same device, cookie for the account it belongs to: accepted.
-      const ok = new PinetSocket(coord2.url);
+      const ok = new PiNetSocket(coord2.url);
       const auth = await ok.connect({
         role: "controller",
         deviceId: device.id,

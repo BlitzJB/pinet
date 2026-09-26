@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowDownIcon, Loader2Icon } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
-import { useConnectionState, usePinet, useSessionState } from "../../lib/context";
+import { useConnectionState, usePiNet, useSessionState } from "../../lib/context";
 import { deriveRunFeedback } from "../../lib/run-state";
 import { ghostButton } from "../ui/surfaces";
 import { groupEntries, MessageGroup } from "./Message";
@@ -35,7 +35,7 @@ function Welcome({ name, onPrompt }: { name?: string | null; onPrompt: (text: st
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 py-16 text-center">
       <div className="fade-in slide-in-from-bottom-1 animate-in fill-mode-both flex flex-col gap-2 duration-300 motion-reduce:animate-none">
-        <h1 className="text-2xl font-semibold tracking-tight">{name ?? "Pinet session"}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{name ?? "PiNet session"}</h1>
         <p className="text-muted-foreground">Ask the remote agent anything, or pick a starter.</p>
       </div>
       <div className="flex w-full max-w-md flex-col gap-2">
@@ -69,7 +69,7 @@ function StartingSession({ name }: { name?: string | null }) {
 }
 
 export function ThreadView({ sessionId }: { sessionId: string }) {
-  const connection = usePinet();
+  const connection = usePiNet();
   const conn = useConnectionState();
   const state = useSessionState(sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);

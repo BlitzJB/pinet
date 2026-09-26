@@ -1,4 +1,4 @@
-import { PinetController } from "../../../src/controller/client.mjs";
+import { PiNetController } from "../../../src/controller/client.mjs";
 import { describeEntry } from "../../../src/controller/portal.mjs";
 import { webCryptoProvider } from "../../../src/crypto/webcrypto.mjs";
 import type { ServerSession, SpawnCapability } from "./api";
@@ -92,9 +92,9 @@ function localId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `local-${Date.now()}-${Math.random()}`;
 }
 
-export class PinetConnection {
+export class PiNetConnection {
   readonly conn = new Store<ConnState>({ status: "idle" });
-  private controller?: PinetController;
+  private controller?: PiNetController;
   private stores = new Map<string, Store<SessionState>>();
   private modelCache = new Map<string, { at: number; models: ModelInfo[] }>();
   private connecting?: Promise<void>;
@@ -163,7 +163,7 @@ export class PinetConnection {
     // account this session is signed in to before using it.
     const me = await getMe().catch(() => null);
     const device = await ensureDevice(me?.accountId);
-    const controller = new PinetController({
+    const controller = new PiNetController({
       url: wsUrl(),
       deviceId: device.deviceId,
       identity: device.identity,
@@ -177,7 +177,7 @@ export class PinetConnection {
     return device;
   }
 
-  #wire(controller: PinetController): void {
+  #wire(controller: PiNetController): void {
     controller.on("disconnected", () => this.conn.set({ status: "reconnecting" }));
     controller.on("reconnecting", () => this.conn.set({ status: "reconnecting" }));
     controller.on("reconnected", () => this.conn.set({ status: "connected" }));

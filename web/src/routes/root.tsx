@@ -3,7 +3,7 @@ import { Outlet } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRightIcon } from "lucide-react";
 import { getMe, loginUrl } from "../lib/api";
-import { PinetProvider } from "../lib/context";
+import { PiNetProvider } from "../lib/context";
 import { SessionSidebar } from "../components/SessionSidebar";
 import { cn } from "../lib/utils";
 
@@ -117,7 +117,7 @@ function Splash() {
     <div className="grid h-full place-items-center">
       <div className="flex items-center gap-3 text-muted-foreground">
         <span className="size-3 animate-pulse rounded-full bg-foreground/30" />
-        Loading Pinet…
+        Loading PiNet…
       </div>
     </div>
   );
@@ -127,7 +127,7 @@ function Login() {
   return (
     <div className="grid h-full place-items-center px-6">
       <div className="fade-in slide-in-from-bottom-1 animate-in fill-mode-both w-full max-w-sm rounded-2xl border border-border/60 bg-card p-8 text-center shadow-xl duration-300 motion-reduce:animate-none">
-        <div className="mb-1 text-2xl font-semibold tracking-tight">Pinet</div>
+        <div className="mb-1 text-2xl font-semibold tracking-tight">PiNet</div>
         <p className="mb-6 text-sm text-muted-foreground">Remote control for pi coding-agent sessions.</p>
         <a
           href={loginUrl("/app/")}
@@ -194,8 +194,8 @@ export function Root() {
   if (me.isLoading) return <Splash />;
   if (me.isError || !me.data) return <Login />;
   return (
-    <PinetProvider>
+    <PiNetProvider>
       <AppShell />
-    </PinetProvider>
+    </PiNetProvider>
   );
 }

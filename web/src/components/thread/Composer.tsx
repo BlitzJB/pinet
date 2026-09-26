@@ -186,7 +186,7 @@ export function Composer({
         onCancel={() => setConfirmCompact(false)}
         description={
           <>
-            The agent summarizes the conversation so far and continues from that summary. The transcript stays in Pinet, but older
+            The agent summarizes the conversation so far and continues from that summary. The transcript stays in PiNet, but older
 detail may be dropped from the model's view.
             {typeof contextUsage?.percent === "number" && (
               <>

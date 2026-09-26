@@ -1,4 +1,4 @@
-# Pinet v1 — Success Criteria
+# PiNet v1 — Success Criteria
 
 All criteria verified by `npm test` (vitest, 75 tests) and the real-process
 extension test. `node --test` is not used; the suite runs with `vitest`.

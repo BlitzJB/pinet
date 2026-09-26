@@ -1,4 +1,4 @@
-// Pinet controller CLI.
+// PiNet controller CLI.
 //
 //   node src/controller/cli.mjs login     # browser SSO + MFA, saves a session
 //   node src/controller/cli.mjs enroll    # register this device with the hub
@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { generateEd25519, generateX25519 } from "../crypto/keys.mjs";
-import { PinetController } from "./client.mjs";
+import { PiNetController } from "./client.mjs";
 
 const DIR = process.env.PINET_DIR ?? join(process.env.HOME ?? ".", ".pinet");
 const CONFIG = join(DIR, "controller.json");
@@ -59,7 +59,7 @@ async function login() {
     const code = url.searchParams.get("code");
     const legacyToken = url.searchParams.get("session_token");
     res.writeHead(200, { "content-type": "text/html" });
-    res.end("<h2>Pinet</h2><p>Login complete. You can close this tab.</p>");
+    res.end("<h2>PiNet</h2><p>Login complete. You can close this tab.</p>");
     let sessionToken = legacyToken ?? undefined;
     if (!sessionToken && code) {
       try {
@@ -153,7 +153,7 @@ async function interactive() {
     console.log(C.yellow("device not enrolled; run login then enroll"));
     process.exit(1);
   }
-  const controller = new PinetController({
+  const controller = new PiNetController({
     url: config.hub ?? DEFAULT_HUB,
     deviceId: config.deviceId,
     identity: config.identity,

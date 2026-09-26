@@ -6,11 +6,11 @@
 
 import { canonicalJson } from "../common/canonical.mjs";
 import { Emitter } from "../common/emitter.mjs";
-import { PinetSocket } from "../common/ws-client.mjs";
+import { PiNetSocket } from "../common/ws-client.mjs";
 import { commandAad, frameAad, openJson, sealJson, unwrapGroupKey } from "../crypto/session-crypto.mjs";
 import { createSeqTracker } from "./seq-tracker.mjs";
 
-export class PinetController extends Emitter {
+export class PiNetController extends Emitter {
   /**
    * @param {{ url: string, deviceId: string, identity: any, encryption: any, deviceName?: string, crypto?: any, reconnect?: boolean }} [options]
    */
@@ -51,7 +51,7 @@ export class PinetController extends Emitter {
   async connect() {
     const provider = this.cryptoProvider ?? (await import(/* @vite-ignore */ "../crypto/provider.mjs")).nodeCryptoProvider;
     this.cryptoProvider = provider;
-    const socket = new PinetSocket(this.url, { crypto: provider, reconnect: this.reconnectOption });
+    const socket = new PiNetSocket(this.url, { crypto: provider, reconnect: this.reconnectOption });
     this.socket = socket;
 
     socket.on("disconnected", () => {

@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { PinetSocket } from "../../src/common/ws-client.mjs";
+import { PiNetSocket } from "../../src/common/ws-client.mjs";
 import { nodeCryptoProvider } from "../../src/crypto/provider.mjs";
 import { generateEd25519 } from "../../src/crypto/keys.mjs";
 
@@ -30,7 +30,7 @@ afterAll(async () => {
 describe("handshake resilience", () => {
   it("rejects promptly when the connection drops mid-handshake", async () => {
     const identity = generateEd25519();
-    const socket = new PinetSocket(url);
+    const socket = new PiNetSocket(url);
     const started = Date.now();
     await expect(
       socket.connect({ role: "controller", deviceId: "dev_x", identityPrivateKey: identity.privateKey, crypto: nodeCryptoProvider, timeoutMs: 8000 }),

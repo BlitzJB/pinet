@@ -1,5 +1,5 @@
 // CryptoProvider: the single abstraction a client must implement to speak the
-// Pinet protocol in any runtime.
+// PiNet protocol in any runtime.
 //
 //   generateIdentityKeypair() -> { publicKey, privateKey }   (Ed25519, opaque handles)
 //   generateEncryptionKeypair() -> { publicKey, privateKey } (X25519, opaque handles)

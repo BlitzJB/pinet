@@ -1,6 +1,6 @@
 # Security
 
-Pinet assumes three distinct trust domains. Controllers and the coordinator are
+PiNet assumes three distinct trust domains. Controllers and the coordinator are
 **not** trusted with each other's secrets, and the coordinator is assumed
 potentially hostile. This document states the model, the controls, and the
 residual risks.

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PinetController } from "../../src/controller/client.mjs";
+import { PiNetController } from "../../src/controller/client.mjs";
 import { HostBridge } from "../../src/host/bridge.mjs";
 import { enrollDevice, makeAccount, startCoordinator, waitFor } from "../helpers/harness.mjs";
 
@@ -38,7 +38,7 @@ describe("multiple host connections sharing one device identity", () => {
     const bridgeB = await makeBridge("s_machine_b", "B");
 
     const controllerEnrollment = enrollDevice(coord.accounts, account.id, "controller", "ctl");
-    const controller = new PinetController({
+    const controller = new PiNetController({
       url: coord.url,
       deviceId: controllerEnrollment.device.id,
       identity: controllerEnrollment.identity,

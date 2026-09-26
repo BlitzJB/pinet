@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PinetController } from "../../src/controller/client.mjs";
+import { PiNetController } from "../../src/controller/client.mjs";
 import { webCryptoProvider } from "../../src/crypto/webcrypto.mjs";
 import { HostBridge } from "../../src/host/bridge.mjs";
 import { enrollDevice, makeAccount, startCoordinator, waitFor } from "../helpers/harness.mjs";
@@ -42,7 +42,7 @@ async function makeWebController(name) {
     identityPub: await webCryptoProvider.exportPublicKey(identity.publicKey),
     encPub: await webCryptoProvider.exportPublicKey(encryption.publicKey),
   });
-  const controller = new PinetController({
+  const controller = new PiNetController({
     url: coord.url,
     deviceId: device.id,
     identity,

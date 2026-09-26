@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PinetController } from "../../src/controller/client.mjs";
+import { PiNetController } from "../../src/controller/client.mjs";
 import { HostBridge } from "../../src/host/bridge.mjs";
 import { enrollDevice, makeAccount, startCoordinator, waitFor } from "../helpers/harness.mjs";
 
@@ -30,7 +30,7 @@ function makeHost(name) {
 
 async function makeController(name) {
   const enrolled = enrollDevice(coord.accounts, account.id, "controller", name);
-  const controller = new PinetController({
+  const controller = new PiNetController({
     url: coord.url,
     deviceId: enrolled.device.id,
     identity: enrolled.identity,
@@ -76,7 +76,7 @@ describe("multiple hosts", () => {
 
     const otherAccount = makeAccount(coord.accounts, "other@example.com");
     const outsider = enrollDevice(coord.accounts, otherAccount.id, "controller", "outsider");
-    const controller = new PinetController({
+    const controller = new PiNetController({
       url: coord.url,
       deviceId: outsider.device.id,
       identity: outsider.identity,

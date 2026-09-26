@@ -84,7 +84,7 @@ export function verifyTotp(secret, code, { time = Date.now(), step = 30, digits 
   return { ok: false, counter: -1 };
 }
 
-export function otpauthUri({ secret, account, issuer = "Pinet", digits = 6, period = 30, algorithm = "SHA1" }) {
+export function otpauthUri({ secret, account, issuer = "PiNet", digits = 6, period = 30, algorithm = "SHA1" }) {
   const label = encodeURIComponent(`${issuer}:${account}`);
   const params = new URLSearchParams({ secret, issuer, algorithm, digits: String(digits), period: String(period) });
   return `otpauth://totp/${label}?${params.toString()}`;

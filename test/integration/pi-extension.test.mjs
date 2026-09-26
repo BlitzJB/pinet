@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { PinetController } from "../../src/controller/client.mjs";
+import { PiNetController } from "../../src/controller/client.mjs";
 import { createCoordinator } from "../../src/coordinator/server.mjs";
 import { enrollDevice, waitFor } from "../helpers/harness.mjs";
 
@@ -65,7 +65,7 @@ suite("pi extension (real process)", () => {
       expect(sessionReady, `no session registered; pi log:\n${log}`).toBe(true);
 
       const controllerEnrollment = enrollDevice(coord.accounts, account.id, "controller", "test-controller");
-      const controller = new PinetController({
+      const controller = new PiNetController({
         url: coord.wsUrl,
         deviceId: controllerEnrollment.device.id,
         identity: controllerEnrollment.identity,

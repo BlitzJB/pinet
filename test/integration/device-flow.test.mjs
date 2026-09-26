@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PinetSocket } from "../../src/common/ws-client.mjs";
+import { PiNetSocket } from "../../src/common/ws-client.mjs";
 import { startMockGoogleIdp } from "../../src/auth/google.mjs";
 import { createCoordinator } from "../../src/coordinator/server.mjs";
 import { loadHostState, onboardHost } from "../../src/host/onboarding.mjs";
@@ -114,7 +114,7 @@ describe("device authorization flow", () => {
       expect(state.hostId).toBe(result.hostId);
 
       // The enrolled host can authenticate over WebSocket.
-      const socket = new PinetSocket(coord.wsUrl);
+      const socket = new PiNetSocket(coord.wsUrl);
       const auth = await socket.connect({ role: "host", deviceId: state.hostId, identityPrivateKey: state.identity.privateKey });
       expect(auth).toMatchObject({ role: "host", deviceId: state.hostId });
       socket.close();

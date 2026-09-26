@@ -1,5 +1,5 @@
 /**
- * Pinet portal extension: use a local pi as a controller.
+ * PiNet portal extension: use a local pi as a controller.
  *
  * `/portal setup` enrolls this pi as a controller device (device flow).
  * `/portal sessions` lists remote sessions. `/portal attach <id>` mounts a
@@ -13,7 +13,7 @@
 import { hostname } from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Markdown, Text } from "@earendil-works/pi-tui";
-import { PinetController } from "../src/controller/client.mjs";
+import { PiNetController } from "../src/controller/client.mjs";
 import { createPortal } from "../src/controller/portal.mjs";
 import {
   clearControllerState,
@@ -99,7 +99,7 @@ export default function portal(pi: Pi): void {
   const hubUrl = process.env.PINET_HUB ?? "ws://127.0.0.1:8787/ws";
   const httpUrl = process.env.PINET_HTTP ?? deriveHttp(hubUrl);
 
-  let controller: PinetController | undefined;
+  let controller: PiNetController | undefined;
   let activePortal: ReturnType<typeof createPortal> | undefined;
   let activeSession: string | undefined;
   let activeCtx: ExtensionContext | undefined;
@@ -123,7 +123,7 @@ export default function portal(pi: Pi): void {
     }
   }
 
-  async function ensureController(): Promise<PinetController> {
+  async function ensureController(): Promise<PiNetController> {
     if (controller) {
       try {
         await controller.socket.waitForReady(15_000);
@@ -135,7 +135,7 @@ export default function portal(pi: Pi): void {
     }
     const state = loadControllerState(dir);
     if (!state.deviceId || !state.identity || !state.encryption) throw new Error("not enrolled; run /portal setup");
-    const instance = new PinetController({
+    const instance = new PiNetController({
       url: hubUrl,
       deviceId: state.deviceId,
       identity: state.identity,
@@ -144,7 +144,7 @@ export default function portal(pi: Pi): void {
       reconnect: true,
     });
     instance.on("reconnected", () => {
-      notify(activeCtx, "Pinet portal reconnected; resyncing remote session.", "info");
+      notify(activeCtx, "PiNet portal reconnected; resyncing remote session.", "info");
     });
     instance.on("resync_error", (info: { sessionId: string; error: string }) => notify(activeCtx, `Resync failed for ${info.sessionId}: ${info.error}`, "error"));
     await instance.connect();
@@ -166,7 +166,7 @@ export default function portal(pi: Pi): void {
   pi.registerEntryRenderer("pinet.remote", (entry, { expanded }, theme) => renderRemote((entry.data ?? {}) as PortalRecord, expanded, theme));
 
   pi.registerCommand("portal", {
-    description: "Pinet portal: /portal setup | sessions | attach <id> | detach | status",
+    description: "PiNet portal: /portal setup | sessions | attach <id> | detach | status",
     handler: async (args, ctx) => {
       const [sub = "status", ...rest] = args.trim().split(/\s+/);
 
@@ -177,12 +177,12 @@ export default function portal(pi: Pi): void {
             dir,
             name: hostname(),
             onCode: ({ userCode, verificationUri }) => {
-              notify(ctx, `Pinet portal setup\n\n1. Open: ${verificationUri}\n2. Sign in (Google + MFA)\n3. Enter code: ${userCode}`, "info");
+              notify(ctx, `PiNet portal setup\n\n1. Open: ${verificationUri}\n2. Sign in (Google + MFA)\n3. Enter code: ${userCode}`, "info");
               openUrl(verificationUri);
             },
           });
           await ensureController();
-          notify(ctx, `Pinet portal enrolled as ${result.deviceId}`, "info");
+          notify(ctx, `PiNet portal enrolled as ${result.deviceId}`, "info");
         } catch (error) {
           notify(ctx, `Portal setup failed: ${String((error as Error)?.message ?? error)}`, "error");
         }
@@ -195,7 +195,7 @@ export default function portal(pi: Pi): void {
         activePortal = undefined;
         activeSession = undefined;
         clearControllerState(dir);
-        notify(ctx, "Pinet portal identity cleared.", "warning");
+        notify(ctx, "PiNet portal identity cleared.", "warning");
         return;
       }
 

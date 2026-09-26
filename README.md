@@ -1,4 +1,4 @@
-# Pinet
+# PiNet
 
 Remote control for [pi](https://pi.dev) coding-agent sessions. A **controller**
 (any device, any number) drives a **host** (a machine running pi) through a
@@ -184,10 +184,10 @@ the `CryptoProvider` primitives can speak it; the reference controller is
 runtime-agnostic and takes an injected `crypto`:
 
 ```js
-import { PinetController } from "./src/controller/client.mjs";
+import { PiNetController } from "./src/controller/client.mjs";
 import { webCryptoProvider } from "./src/crypto/webcrypto.mjs";
 
-const controller = new PinetController({
+const controller = new PiNetController({
   url: "wss://hub.example/ws",
   deviceId, identity, encryption,      // keypairs from your provider
   crypto: webCryptoProvider,           // browser/Deno/Bun; Node is the default

@@ -1,4 +1,4 @@
-# Deploying the Pinet coordinator
+# Deploying the PiNet coordinator
 
 A persistent, TLS-terminated coordinator on Ubuntu 24.04 with systemd + nginx.
 

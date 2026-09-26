@@ -1,4 +1,4 @@
-# Pinet Protocol v1
+# PiNet Protocol v1
 
 Remote control for pi coding-agent sessions across three independent trust
 domains: **controllers** (any device), the **coordinator** (registry + router),

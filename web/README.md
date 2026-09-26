@@ -1,4 +1,4 @@
-# Pinet web client
+# PiNet web client
 
 A Vite + React + TypeScript SPA for controlling pi sessions from a browser.
 Built with the TanStack stack and Tailwind CSS, served by the coordinator at
@@ -39,7 +39,7 @@ It reuses the repository's browser-safe client core:
 - `src/lib/device.ts` — generates this browser's controller keypair with
   `webCryptoProvider`, registers it (`POST /devices/register`), and stores the
   `CryptoKey`s in IndexedDB.
-- `src/lib/pinet.ts` — wraps `PinetController` (from `../../../src/controller/
+- `src/lib/pinet.ts` — wraps `PiNetController` (from `../../../src/controller/
   client.mjs`) over `webCryptoProvider`, subscribes to decrypted session frames,
   and maps remote pi entries to display blocks with `describeEntry`.
 - `src/lib/api.ts` — same-origin fetches for `/me`, `/devices`, `/auth/logout`.

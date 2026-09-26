@@ -3,7 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon, Loader2Icon, MessageSquareIcon, MoreVerticalIcon, PanelRightIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { getMe, type ServerSession } from "../lib/api";
-import { useConnectionState, usePinet } from "../lib/context";
+import { useConnectionState, usePiNet } from "../lib/context";
 import { groupSessionsByHost } from "../lib/session-groups";
 import { cn } from "../lib/utils";
 import { usePanes } from "../lib/use-panes";
@@ -80,7 +80,7 @@ function RowMenu({
 }
 
 export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
-  const connection = usePinet();
+  const connection = usePiNet();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { primary: activeSessionId, side: sidePaneIds, availability, searchFor, openToSide } = usePanes();
@@ -179,7 +179,7 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       <div className="flex items-center gap-2 px-4 py-3.5">
-        <span className="text-sm font-semibold tracking-tight">Pinet</span>
+        <span className="text-sm font-semibold tracking-tight">PiNet</span>
         <ConnectionDot />
       </div>
 

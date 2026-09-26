@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { canonicalJson } from "../../src/common/canonical.mjs";
-import { PinetController } from "../../src/controller/client.mjs";
+import { PiNetController } from "../../src/controller/client.mjs";
 import { commandAad, sealJson } from "../../src/crypto/e2e.mjs";
 import { sign } from "../../src/crypto/keys.mjs";
 import { HostBridge } from "../../src/host/bridge.mjs";
@@ -37,7 +37,7 @@ function makeHost(name = "studio") {
 
 async function makeController(name) {
   const enrolled = enrollDevice(coord.accounts, account.id, "controller", name);
-  const controller = new PinetController({
+  const controller = new PiNetController({
     url: coord.url,
     deviceId: enrolled.device.id,
     identity: enrolled.identity,

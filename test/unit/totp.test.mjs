@@ -50,7 +50,7 @@ describe("totp", () => {
     const uri = otpauthUri({ secret: "JBSWY3DPEHPK3PXP", account: "user@example.com" });
     expect(uri).toContain("otpauth://totp/");
     expect(uri).toContain("secret=JBSWY3DPEHPK3PXP");
-    expect(uri).toContain("issuer=Pinet");
+    expect(uri).toContain("issuer=PiNet");
   });
 });
 

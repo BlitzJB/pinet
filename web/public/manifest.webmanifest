@@ -1,6 +1,6 @@
 {
-  "name": "Pinet",
-  "short_name": "Pinet",
+  "name": "PiNet",
+  "short_name": "PiNet",
   "description": "Remote control for pi coding-agent sessions.",
   "start_url": "/app/",
   "scope": "/app/",

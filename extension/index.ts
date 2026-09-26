@@ -1,5 +1,5 @@
 /**
- * Pinet host extension.
+ * PiNet host extension.
  *
  * Onboarding happens inside pi: run `/pinet setup`. It shows a short code and
  * a URL, opens the browser for Google SSO + MFA, and completes enrollment and
@@ -428,7 +428,7 @@ export default function pinet(pi: Pi): void {
   // -- /pinet command -------------------------------------------------------
 
   pi.registerCommand("pinet", {
-    description: "Pinet remote control: /pinet setup | status | reconnect | logout",
+    description: "PiNet remote control: /pinet setup | status | reconnect | logout",
     handler: async (args, ctx) => {
       const sub = (args.trim().split(/\s+/)[0] || "status").toLowerCase();
       const state = loadHostState(dir);
@@ -450,7 +450,7 @@ export default function pinet(pi: Pi): void {
         bridge?.close();
         bridge = undefined;
         clearHostState(dir);
-        notify(ctx, "Pinet: host identity cleared.", "warning");
+        notify(ctx, "PiNet: host identity cleared.", "warning");
         return;
       }
 
@@ -459,9 +459,9 @@ export default function pinet(pi: Pi): void {
         bridge = undefined;
         try {
           await connectBridge();
-          notify(ctx, "Pinet: reconnected.", "info");
+          notify(ctx, "PiNet: reconnected.", "info");
         } catch (error) {
-          notify(ctx, `Pinet: ${String((error as Error)?.message ?? error)}`, "error");
+          notify(ctx, `PiNet: ${String((error as Error)?.message ?? error)}`, "error");
         }
         return;
       }
@@ -472,7 +472,7 @@ export default function pinet(pi: Pi): void {
           // identity instead of creating another device.
           if (state.hostId) {
             await connectBridge(true);
-            notify(ctx, `Pinet: already set up as ${state.hostId}`, "info");
+            notify(ctx, `PiNet: already set up as ${state.hostId}`, "info");
             return;
           }
           const result = await onboardHost({
@@ -480,14 +480,14 @@ export default function pinet(pi: Pi): void {
             dir,
             name: hostname(),
             onCode: ({ userCode, verificationUri }) => {
-              notify(ctx, `Pinet setup\n\n1. Open: ${verificationUri}\n2. Sign in (Google + MFA)\n3. Enter code: ${userCode}`, "info");
+              notify(ctx, `PiNet setup\n\n1. Open: ${verificationUri}\n2. Sign in (Google + MFA)\n3. Enter code: ${userCode}`, "info");
               openUrl(verificationUri);
             },
           });
           await connectBridge(true);
-          notify(ctx, `Pinet: enrolled as ${result.hostId}\nFingerprint: ${String(result.fingerprint).slice(0, 16)}`, "info");
+          notify(ctx, `PiNet: enrolled as ${result.hostId}\nFingerprint: ${String(result.fingerprint).slice(0, 16)}`, "info");
         } catch (error) {
-          notify(ctx, `Pinet setup failed: ${String((error as Error)?.message ?? error)}`, "error");
+          notify(ctx, `PiNet setup failed: ${String((error as Error)?.message ?? error)}`, "error");
         }
         return;
       }

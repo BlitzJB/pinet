@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent installer for the Pinet coordinator on Debian/Ubuntu with systemd
+# Idempotent installer for the PiNet coordinator on Debian/Ubuntu with systemd
 # and nginx. Run as root from the repository root:
 #
 #   sudo DOMAIN=pineit.bharathi.fi ./deploy/install.sh

@@ -131,7 +131,7 @@ async function serveWebApp(res, webDir, pathname) {
     res.writeHead(503, { "content-type": "text/html; charset=utf-8" });
     res.end(
       "<!doctype html><meta charset=utf-8><body style='font-family:system-ui;max-width:40rem;margin:3rem auto'>" +
-        "<h1>Pinet web app not built</h1><p>Run <code>npm --prefix web install &amp;&amp; npm --prefix web run build</code>, then restart the coordinator.</p>",
+        "<h1>PiNet web app not built</h1><p>Run <code>npm --prefix web install &amp;&amp; npm --prefix web run build</code>, then restart the coordinator.</p>",
     );
   }
 }
@@ -241,8 +241,8 @@ function escapeHtml(value) {
 }
 
 function devicePage(code, message) {
-  return `<!doctype html><meta charset="utf-8"><title>Pinet</title>
-  <h2>Pinet device login</h2>
+  return `<!doctype html><meta charset="utf-8"><title>PiNet</title>
+  <h2>PiNet device login</h2>
   ${message ? `<p>${escapeHtml(message)}</p>` : "<p>Enter the code shown in pi to connect this device.</p>"}
   <form method="post" action="/auth/device/approve">
     <input name="userCode" value="${escapeHtml(code)}" placeholder="XXXX-XXXX" autocomplete="one-time-code" autofocus/>
@@ -256,7 +256,7 @@ function page(title, body) {
 
 function mfaPage(pending, returnTo) {
   return page(
-    "Pinet — verify",
+    "PiNet — verify",
     `<h1>Verify it's you</h1>
      <form method="post" action="/auth/mfa/verify">
        <input type="hidden" name="pending" value="${escapeHtml(pending)}"/>
@@ -274,7 +274,7 @@ function mfaSetupPage({ email, secret, uri, recoveryCodes, error }) {
     ? `<h3>Recovery codes</h3><p>Save these now. Each works once.</p><pre>${recoveryCodes.map(escapeHtml).join("\n")}</pre>`
     : `<p><em>Recovery codes were shown when you first opened this page.</em></p>`;
   return page(
-    "Pinet — set up MFA",
+    "PiNet — set up MFA",
     `<h1>Set up multi-factor authentication</h1>
      <p>Account: <b>${escapeHtml(email)}</b></p>
      ${error ? `<p style="color:#c5221f">${escapeHtml(error)}</p>` : ""}
@@ -357,7 +357,7 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
           if (error?.code === "access_denied") {
             if (wantsJson(req, url)) return json(res, 403, { error: "access_denied" });
             res.writeHead(403, { "content-type": "text/html" });
-            res.end(page("Pinet — access denied", "<h1>Access denied</h1><p>This account is not permitted to use this Pinet hub.</p>"));
+            res.end(page("PiNet — access denied", "<h1>Access denied</h1><p>This account is not permitted to use this PiNet hub.</p>"));
             return;
           }
           throw error;
@@ -500,7 +500,7 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
         const account = accounts.getAccount(current.accountId);
         if (account.mfa.enrolled) {
           res.writeHead(200, { "content-type": "text/html" });
-          res.end(page("Pinet — MFA", `<h1>MFA enabled</h1><p>An authenticator app is already enrolled for ${escapeHtml(account.email)}.</p><p><a href="/">Back</a></p>`));
+          res.end(page("PiNet — MFA", `<h1>MFA enabled</h1><p>An authenticator app is already enrolled for ${escapeHtml(account.email)}.</p><p><a href="/">Back</a></p>`));
           return;
         }
         const enrollment = authService.enrollMfa(current.accountId);
