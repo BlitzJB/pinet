@@ -49,6 +49,8 @@ export interface SpawnerInfo {
   label: string;
   root: string;
   max?: number;
+  /** The host the daemon runs on, so a picker only offers its own host's. */
+  deviceId?: string;
 }
 
 export interface VoiceResult {
@@ -122,6 +124,14 @@ function localId(): string {
 
 export class PiNetConnection {
   readonly conn = new Store<ConnState>({ status: "idle" });
+  /**
+   * Spawners on this account (host-side daemons started by hand with /rc).
+   *
+   * A store rather than a callback: `onSpawners` returned a no-op when the
+   * sidebar mounted before the socket was up, and never retried, so the picker
+   * stayed empty forever.
+   */
+  readonly spawnerStore = new Store<{ list: SpawnerInfo[] }>({ list: [] });
   private controller?: PiNetController;
   private stores = new Map<string, Store<SessionState>>();
   private modelCache = new Map<string, { at: number; models: ModelInfo[] }>();
@@ -207,6 +217,11 @@ export class PiNetConnection {
   }
 
   #wire(controller: PiNetController): void {
+    controller.on("spawners", (data: any) => this.spawnerStore.set({ list: (data?.spawners ?? []) as SpawnerInfo[] }));
+    // Pull once the socket is up (`refreshSpawners` waits for it) and again after
+    // any reconnect, since a spawner may have come or gone meanwhile.
+    controller.on("reconnected", () => void controller.refreshSpawners());
+    void controller.refreshSpawners();
     controller.on("disconnected", () => this.conn.set({ status: "reconnecting" }));
     controller.on("reconnecting", () => this.conn.set({ status: "reconnecting" }));
     controller.on("reconnected", () => this.conn.set({ status: "connected" }));
@@ -397,20 +412,7 @@ export class PiNetConnection {
   /** Ask a host to spawn a new session (session/worktree spawn mode). */
   /** Spawners on this account: host-side daemons started by hand with /rc. */
   spawners(): SpawnerInfo[] {
-    return (this.controller?.spawners() as SpawnerInfo[]) ?? [];
-  }
-
-  /**
-   * Subscribe to the spawner list. The hub pushes it when one registers or goes
-   * away, and answers a pull, so a freshly opened sidebar is never stale.
-   */
-  onSpawners(fn: (spawners: SpawnerInfo[]) => void): () => void {
-    const controller = this.controller;
-    if (!controller) return () => {};
-    const handler = (data: { spawners?: SpawnerInfo[] }) => fn(data?.spawners ?? []);
-    controller.on("spawners", handler);
-    controller.refreshSpawners();
-    return () => controller.off("spawners", handler);
+    return this.spawnerStore.get().list;
   }
 
   /** Create a session through a spawner, in a subdirectory of its scope. */

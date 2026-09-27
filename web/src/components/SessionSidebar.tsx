@@ -11,6 +11,7 @@ import { AnchoredMenu, menuItem } from "./ui/AnchoredMenu";
 import { RenameInput } from "./ui/RenameInput";
 import { Avatar } from "./Avatar";
 import { SpawnDialog, type SpawnCapabilityInfo } from "./SpawnDialog";
+import { useStore } from "../lib/store";
 
 const COLLAPSE_KEY = "pinet.collapsedHosts";
 
@@ -86,7 +87,7 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [localNames, setLocalNames] = useState<Record<string, string>>({});
   const [spawnTarget, setSpawnTarget] = useState<{ hostId: string; hostLabel: string; sessionId: string; capability: SpawnCapabilityInfo } | null>(null);
-  const [spawners, setSpawners] = useState<{ spawnerId: string; label: string; root: string; max?: number }[]>([]);
+
   const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
 
   // A rename is shown immediately; once the coordinator's catalog agrees (host
@@ -128,9 +129,6 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
       return next;
     });
   }
-
-  // The hub pushes the spawner list and answers a pull, so the picker is current.
-  useEffect(() => connection.onSpawners(setSpawners), [connection]);
 
   /** Create a session through the chosen spawner, in the chosen subdirectory. */
   async function createSession(options: { spawnerId: string; name?: string; dir?: string }): Promise<void> {
@@ -342,7 +340,7 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
       <SpawnDialog
         open={Boolean(spawnTarget)}
         hostLabel={spawnTarget?.hostLabel ?? ""}
-        spawners={spawners}
+        spawners={useStore(connection.spawnerStore).list.filter((entry) => !spawnTarget?.hostId || entry.deviceId === spawnTarget.hostId)}
         onClose={() => setSpawnTarget(null)}
         load={(spawnerId, path) => connection.spawnerDirs(spawnerId, path)}
         onCreate={createSession}

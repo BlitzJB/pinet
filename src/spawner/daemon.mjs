@@ -57,6 +57,7 @@ export async function startSpawner({
   });
 
   const socket = new PiNetSocket(hubUrl, { reconnect: true });
+  socket.on("disconnected", () => console.error("pinet spawner: hub connection lost, retrying"));
   const name = label || `${hostname()}:${root}`;
   const announce = () =>
     socket.send("spawner.register", { spawnerId, label: name, root, max: spawner.max, host: hostname() });
@@ -79,7 +80,19 @@ export async function startSpawner({
   });
 
   await socket.connect({ role: "spawner", deviceId: state.hostId, identityPrivateKey: state.identity.privateKey, timeoutMs: 20_000 });
-  return { socket, spawner, spawnerId, root, label: name };
+
+  // Keep the event loop alive and re-announce on a timer.
+  //
+  // The socket's reconnect timer is unref'd, so with nothing else pending Node
+  // exits *while waiting to reconnect* — a spawner silently disappeared whenever
+  // the coordinator restarted. pi survives the same event only because its TUI
+  // holds the loop open. Deliberately not unref'd, and idempotent at the hub, so a
+  // registration lost in a restart heals on its own.
+  const keepalive = setInterval(() => {
+    if (socket.ready) announce();
+  }, 15_000);
+
+  return { socket, spawner, spawnerId, root, label: name, keepalive };
 }
 
 const invokedDirectly = process.argv[1]?.endsWith("daemon.mjs");
@@ -98,6 +111,10 @@ if (invokedDirectly) {
       if (String(error?.message) === "not_enrolled") console.error("  run /pinet setup in pi on this host first");
       process.exit(1);
     });
-  // Detached sessions survive this process; only its own bookkeeping goes away.
+  // A coordinator restart must not take the spawner with it: announce again on
+  // every reconnect, and treat a stray rejection as noise rather than a reason to
+  // exit. Detached sessions outlive this process either way.
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => process.exit(0));
+  process.on("unhandledRejection", (error) => console.error("pinet spawner: unhandled rejection", error));
+  process.on("uncaughtException", (error) => console.error("pinet spawner: uncaught exception", error));
 }

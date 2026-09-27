@@ -14,7 +14,7 @@
 
 import { spawn as spawnProcess } from "node:child_process";
 import { hostname } from "node:os";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { HostBridge } from "../src/host/bridge.mjs";
@@ -567,13 +567,19 @@ export default function pinet(pi: Pi): void {
     //     decision, not a default; `/portal mount` inside it publishes it.
     // PINET_AUTO_MOUNT=1 restores the old behaviour for a host that is only
     // reachable through PiNet (the VM runs this, so its session keeps working).
-    if (process.env.PINET_SPAWNED !== "1" && process.env.PINET_AUTO_MOUNT !== "1") {
-      trace("direct session: not mounted (run /portal mount)");
-      return;
-    }
     trace("autoStart");
     try {
       const state = loadHostState(dir);
+      // Mounting once is remembered on disk: `/portal mount` has to survive a
+      // restart, or a host reachable only through PiNet goes dark on every restart
+      // — which is exactly what happened. A marker file rather than a field in
+      // host.json, which loadHostState is free to narrow.
+      const autoMount =
+        process.env.PINET_SPAWNED === "1" || process.env.PINET_AUTO_MOUNT === "1" || existsSync(`${dir}/auto-mount`);
+      if (!autoMount) {
+        trace("direct session: not mounted (run /portal mount)");
+        return;
+      }
       if (state.hostId && state.identity && state.encryption) {
         await connectBridge();
         return;
@@ -920,6 +926,12 @@ export default function pinet(pi: Pi): void {
     try {
       await connectBridge();
       if (activeCtx && !sessionId) registerSession(activeCtx);
+      // Remember the decision: next start mounts without a command.
+      try {
+        if (!existsSync(`${dir}/auto-mount`)) writeFileSync(`${dir}/auto-mount`, `${new Date().toISOString()}\n`);
+      } catch {
+        /* best effort */
+      }
       trace("mounted on request", `sessionId=${sessionId ?? "-"}`);
     } catch (error) {
       reportError("mount", error);
