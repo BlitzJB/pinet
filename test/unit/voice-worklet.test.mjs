@@ -26,6 +26,19 @@ describe("voice capture worklet", () => {
     expect(voice).toMatch(/WORKLET_URL = `\$\{import\.meta\.env\.BASE_URL\}voice-worklet\.js`/);
   });
 
+  it("allows the microphone for this origin, so our own header cannot block capture", () => {
+    // `microphone=()` disallows the feature for *every* origin including this
+    // one. The Permissions API then reports "denied" and getUserMedia fails
+    // instantly without ever prompting — indistinguishable from a user or OS
+    // block, and unaffected by any user setting. That is exactly what shipped.
+    const header = http.match(/"permissions-policy":\s*"([^"]+)"/)?.[1] ?? "";
+    expect(header).toContain("microphone=(self)");
+    expect(header).not.toMatch(/microphone=\(\)/);
+    // Everything else stays denied: the header still does its job.
+    expect(header).toContain("camera=()");
+    expect(header).toContain("geolocation=()");
+  });
+
   it("keeps the CSP same-origin, so a Blob worklet stays impossible", () => {
     const csp = http.match(/default-src[^"]+/)?.[0] ?? "";
     expect(csp).toContain("worker-src 'self'");

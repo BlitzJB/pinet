@@ -89,7 +89,13 @@ function securityHeaders(req, publicUrl) {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
-    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    // Voice dictation needs the microphone in this document. `microphone=()`
+    // disallows it for *every* origin including this one, which makes the
+    // Permissions API report "denied" and getUserMedia fail instantly without
+    // ever prompting — indistinguishable from a user or OS block, and immune to
+    // any user setting. Scope it to self: still no microphone for embeds or
+    // third-party frames, which is what this header is for.
+    "permissions-policy": "camera=(), microphone=(self), geolocation=()",
     "cross-origin-opener-policy": "same-origin",
     "content-security-policy":
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; font-src 'self' data:; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",

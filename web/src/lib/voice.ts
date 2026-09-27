@@ -160,6 +160,18 @@ export async function captureDiagnostics(extra: Record<string, unknown> = {}): P
     audioWorkletSupported: typeof AudioContext === "undefined" ? false : "audioWorklet" in AudioContext.prototype,
     mediaDevices: typeof navigator !== "undefined" && Boolean(navigator.mediaDevices),
     permissionsApi: typeof navigator !== "undefined" && typeof navigator.permissions?.query === "function",
+    documentAllowsMicrophone: (() => {
+      // The applied document policy. A `Permissions-Policy: microphone=()` header
+      // makes this false — and that looks exactly like a user or OS block, so it
+      // is worth reporting separately.
+      if (typeof document === "undefined") return "unknown";
+      const policy = (document as unknown as { permissionsPolicy?: { allowsFeature?: (feature: string) => boolean } }).permissionsPolicy;
+      try {
+        return policy?.allowsFeature ? policy.allowsFeature("microphone") : "unknown";
+      } catch {
+        return "unknown";
+      }
+    })(),
     permission: await micPermissionState(),
     secureContext: typeof isSecureContext === "boolean" ? isSecureContext : "unknown",
     inputs: await micDevices(),
