@@ -19,6 +19,8 @@
  * with the coordinator like any other host — no extra service.
  */
 import { execFile, execFileSync, spawn as nodeSpawn } from "node:child_process";
+import { readdirSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { promisify } from "node:util";
@@ -97,6 +99,56 @@ export class SessionSpawner {
   }
 
   /** Host capability advertised in session meta so controllers can offer "new session". */
+  /**
+   * Resolve a requested working directory against the spawner's scope.
+   *
+   * A spawner owns a directory and everything under it, and nothing else. Both
+   * sides are resolved through `realpath` first, so a symlink pointing outside the
+   * scope fails the check rather than escaping it — this is the one place a
+   * controller's input reaches the filesystem.
+   */
+  resolveDir(requested) {
+    if (!requested) return this.cwd;
+    try {
+      const root = realpathSync(this.cwd);
+      const target = realpathSync(resolve(root, String(requested)));
+      const rel = relative(root, target);
+      if (rel.startsWith("..") || isAbsolute(rel)) return undefined;
+      if (!statSync(target).isDirectory()) return undefined;
+      return target;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Subdirectories of `path` (default: the spawner root), for the picker in the
+   * UI. Scope-checked like everything else, and quiet: no dotdirs, no
+   * node_modules, capped so a huge tree cannot stall a controller.
+   */
+  directories(path, { limit = 200 } = {}) {
+    const base = this.resolveDir(path);
+    if (!base) return { ok: false, error: "dir_out_of_scope" };
+    let entries = [];
+    try {
+      entries = readdirSync(base, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules")
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+    } catch (error) {
+      return { ok: false, error: `read_failed:${String(error?.message ?? error)}` };
+    }
+    const root = realpathSync(this.cwd);
+    return {
+      ok: true,
+      // The controller only ever deals in paths relative to the spawner root.
+      path: relative(root, base) || ".",
+      root,
+      entries: entries.slice(0, limit),
+      truncated: entries.length > limit,
+    };
+  }
+
   capability() {
     return {
       mode: this.mode,
@@ -140,11 +192,14 @@ export class SessionSpawner {
     }
   }
 
-  spawn({ name } = {}) {
+  spawn({ name, dir } = {}) {
     if (!this.enabled) return { ok: false, error: "spawn_disabled" };
     if (this.mode !== "session") return { ok: false, error: `spawn_mode_unavailable:${this.mode}` };
     this.#reconcile();
     if (this.#children.size >= this.max) return { ok: false, error: "spawn_capacity" };
+    // Sessions can be rooted anywhere inside the spawner's scope.
+    const cwd = this.resolveDir(dir);
+    if (!cwd) return { ok: false, error: "dir_out_of_scope" };
 
     const sessionId = randomUUID();
     const sessionName = String(name ?? "").trim() || this.autoName();
@@ -154,20 +209,20 @@ export class SessionSpawner {
       try {
         this.spawnFn(
           this.tmux,
-          ["new-session", "-d", "-s", tmuxName, "-c", this.cwd, this.#tmuxCommand({ sessionId, name: sessionName })],
+          ["new-session", "-d", "-s", tmuxName, "-c", cwd, this.#tmuxCommand({ sessionId, name: sessionName })],
           { stdio: "ignore" },
         );
       } catch (error) {
         return { ok: false, error: `spawn_failed:${String(error?.message ?? error)}` };
       }
-      this.#children.set(sessionId, { sessionId, name: sessionName, tmuxName, detached: true, pid: null, startedAt: this.clock() });
-      return { ok: true, sessionId, name: sessionName, pid: null, detached: true, tmuxName };
+      this.#children.set(sessionId, { sessionId, name: sessionName, tmuxName, cwd, detached: true, pid: null, startedAt: this.clock() });
+      return { ok: true, sessionId, name: sessionName, cwd, pid: null, detached: true, tmuxName };
     }
 
     let child;
     try {
       child = this.spawnFn(this.piBin, this.buildArgs({ sessionId, name: sessionName }), {
-        cwd: this.cwd,
+        cwd,
         env: { ...this.env, PINET_SPAWNED: "1" },
         stdio: ["pipe", "pipe", "pipe"],
       });
@@ -178,12 +233,12 @@ export class SessionSpawner {
     child.stdout?.resume?.();
     child.stderr?.resume?.();
 
-    this.#children.set(sessionId, { sessionId, name: sessionName, pid: child.pid, detached: false, startedAt: this.clock(), child });
+    this.#children.set(sessionId, { sessionId, name: sessionName, cwd, pid: child.pid, detached: false, startedAt: this.clock(), child });
     const forget = () => this.#children.delete(sessionId);
     child.once?.("exit", forget);
     child.once?.("error", forget);
 
-    return { ok: true, sessionId, name: sessionName, pid: child.pid, detached: false };
+    return { ok: true, sessionId, name: sessionName, cwd, pid: child.pid, detached: false };
   }
 
   kill(sessionId) {

@@ -1,8 +1,8 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRightIcon, Loader2Icon, MessageSquareIcon, MoreVerticalIcon, PanelRightIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon, SettingsIcon } from "lucide-react";
-import { getMe, type ServerSession } from "../lib/api";
+import { ChevronRightIcon, MessageSquareIcon, MoreVerticalIcon, PanelRightIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { getMe } from "../lib/api";
 import { useConnectionState, usePiNet } from "../lib/context";
 import { groupSessionsByHost } from "../lib/session-groups";
 import { cn } from "../lib/utils";
@@ -10,14 +10,9 @@ import { usePanes } from "../lib/use-panes";
 import { AnchoredMenu, menuItem } from "./ui/AnchoredMenu";
 import { RenameInput } from "./ui/RenameInput";
 import { Avatar } from "./Avatar";
+import { SpawnDialog, type SpawnCapabilityInfo } from "./SpawnDialog";
 
 const COLLAPSE_KEY = "pinet.collapsedHosts";
-
-const spawnChip = (active: boolean) =>
-  cn(
-    "rounded-full px-2 py-0.5 text-[11px] transition-colors disabled:opacity-40",
-    active ? "bg-foreground text-background" : "bg-foreground/[0.06] text-muted-foreground hover:bg-foreground/10",
-  );
 
 function loadCollapsed(): Set<string> {
   try {
@@ -90,11 +85,7 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [editing, setEditing] = useState<string | null>(null);
   const [localNames, setLocalNames] = useState<Record<string, string>>({});
-  const [spawnHost, setSpawnHost] = useState<string | null>(null);
-  const [spawnName, setSpawnName] = useState("");
-  const [spawnMode, setSpawnMode] = useState("session");
-  const [spawnBusy, setSpawnBusy] = useState(false);
-  const [spawnError, setSpawnError] = useState<string | null>(null);
+  const [spawnTarget, setSpawnTarget] = useState<{ hostId: string; hostLabel: string; sessionId: string; capability: SpawnCapabilityInfo } | null>(null);
   const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
 
   // A rename is shown immediately; once the coordinator's catalog agrees (host
@@ -137,27 +128,17 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
     });
   }
 
-  async function submitSpawn(event: FormEvent, group: { hostId: string; sessions: ServerSession[] }) {
-    event.preventDefault();
-    const target =
-      group.sessions.find((session) => session.sessionId === activeSessionId)?.sessionId ?? group.sessions[0]?.sessionId;
+  /** Create a session on a host's spawner, rooted wherever the dialog chose. */
+  async function createSession(options: { name?: string; dir?: string }): Promise<void> {
+    const target = spawnTarget;
     if (!target) return;
-    setSpawnBusy(true);
-    setSpawnError(null);
-    try {
-      const result = await connection.spawn(target, { name: spawnName.trim() || undefined, mode: spawnMode });
-      setSpawnHost(null);
-      setSpawnName("");
-      setSpawnMode("session");
-      onNavigate?.();
-      void queryClient.invalidateQueries({ queryKey: ["catalog"] });
-      if (result.sessionId) void navigate({ to: "/s/$sessionId", params: { sessionId: result.sessionId } });
-    } catch (error) {
-      setSpawnError(String((error as Error)?.message ?? error));
-    } finally {
-      setSpawnBusy(false);
-    }
+    const result = await connection.spawn(target.sessionId, { ...options, mode: "session" });
+    setSpawnTarget(null);
+    onNavigate?.();
+    void queryClient.invalidateQueries({ queryKey: ["catalog"] });
+    if (result.sessionId) void navigate({ to: "/s/$sessionId", params: { sessionId: result.sessionId } });
   }
+
 
   async function saveName(sessionId: string, name: string) {
     setEditing(null);
@@ -248,8 +229,14 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                     aria-label={`New session on ${group.hostName}`}
                     title={spawnTitle}
                     onClick={() => {
-                      setSpawnError(null);
-                      setSpawnHost((value) => (value === group.hostId ? null : group.hostId));
+                      const spawnable = group.sessions.find((session) => session.meta?.spawn);
+                      if (!spawnable?.meta?.spawn) return;
+                      setSpawnTarget({
+                        hostId: group.hostId,
+                        hostLabel: group.hostName,
+                        sessionId: spawnable.sessionId,
+                        capability: spawnable.meta.spawn,
+                      });
                     }}
                     className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
                   >
@@ -257,40 +244,6 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                   </button>
                 )}
               </div>
-
-              {spawnHost === group.hostId && (
-                <form onSubmit={(event) => void submitSpawn(event, group)} className="mx-1.5 mb-1 rounded-xl border border-border/60 bg-foreground/[0.02] p-2">
-                  <input
-                    autoFocus
-                    value={spawnName}
-                    onChange={(event) => setSpawnName(event.target.value)}
-                    placeholder="Session name (optional)"
-                    className="w-full rounded-md border border-border/60 bg-background px-2 py-1 text-[12.5px] outline-none focus:border-blue-500"
-                  />
-                  <div className="mt-2 flex items-center gap-1">
-                    <button type="button" onClick={() => setSpawnMode("session")} className={spawnChip(spawnMode === "session")}>
-                      Same dir
-                    </button>
-                    <button type="button" disabled title="Worktree mode is coming soon" className={spawnChip(false)}>
-                      Worktree
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={spawnBusy || !capability?.mode}
-                      className="ms-auto inline-flex items-center gap-1 rounded-full bg-foreground px-2.5 py-1 text-[11.5px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
-                    >
-                      {spawnBusy && <Loader2Icon className="size-3 animate-spin motion-reduce:animate-none" />}
-                      Create
-                    </button>
-                  </div>
-                  {capability && (
-                    <p className="mt-1.5 truncate text-[10.5px] text-muted-foreground/60" title={capability.cwd}>
-                      starts in {capability.cwd}
-                    </p>
-                  )}
-                  {spawnError && <p className="mt-1 text-[11px] text-destructive">{spawnError}</p>}
-                </form>
-              )}
 
               {!isCollapsed &&
                 group.sessions.map((session) => {
@@ -383,6 +336,14 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
           }}
         />
       )}
+      <SpawnDialog
+        open={Boolean(spawnTarget)}
+        hostLabel={spawnTarget?.hostLabel ?? ""}
+        target={spawnTarget}
+        onClose={() => setSpawnTarget(null)}
+        load={(path) => connection.spawnDirs(spawnTarget!.sessionId, path)}
+        onCreate={createSession}
+      />
     </aside>
   );
 }

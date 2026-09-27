@@ -492,7 +492,7 @@ export default function pinet(pi: Pi): void {
         return {
           accepted: true,
           mode: "immediate",
-          data: { sessionId: result.sessionId, name: result.name, pid: result.pid ?? null },
+          data: { sessionId: result.sessionId, name: result.name, cwd: result.cwd ?? null, pid: result.pid ?? null },
         };
       }
       default:
@@ -556,6 +556,13 @@ export default function pinet(pi: Pi): void {
     if (isSubagentChild) {
       // Deliberately inert: see the PI_SUBAGENT_CHILD note above.
       trace("subagent child: pinet host disabled");
+      return;
+    }
+    // A spawned session is mounted on request, not on startup: run `/portal mount`
+    // inside it to publish it. Without this every session a spawner creates would
+    // appear in the sidebar whether or not it was wanted.
+    if (process.env.PINET_SPAWNED === "1" && process.env.PINET_AUTO_MOUNT !== "1") {
+      trace("spawned session: not mounted (run /portal mount)");
       return;
     }
     trace("autoStart");
@@ -818,6 +825,29 @@ export default function pinet(pi: Pi): void {
       audioChunks.push({ index, data });
     });
   }
+
+  /**
+   * Publish this session now. Spawned sessions skip auto-mount, so this is what
+   * `/portal mount` triggers.
+   */
+  async function mountHost(): Promise<void> {
+    if (isSubagentChild) return;
+    if (bridge?.socket?.ready && sessionId) return;
+    const state = loadHostState(dir);
+    if (!state.hostId || !state.identity || !state.encryption) {
+      trace("mount skipped: not enrolled");
+      return;
+    }
+    try {
+      await connectBridge();
+      if (activeCtx && !sessionId) registerSession(activeCtx);
+      trace("mounted on request", `sessionId=${sessionId ?? "-"}`);
+    } catch (error) {
+      reportError("mount", error);
+    }
+  }
+
+  pi.events?.on?.("pinet:mount", () => void mountHost());
 
   void autoStart();
   trace("extension loaded");

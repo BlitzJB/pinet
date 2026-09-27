@@ -166,9 +166,17 @@ export default function portal(pi: Pi): void {
   pi.registerEntryRenderer("pinet.remote", (entry, { expanded }, theme) => renderRemote((entry.data ?? {}) as PortalRecord, expanded, theme));
 
   pi.registerCommand("portal", {
-    description: "PiNet portal: /portal setup | sessions | attach <id> | detach | status",
+    description: "PiNet portal: /portal mount | setup | sessions | attach <id> | detach | status",
     handler: async (args, ctx) => {
       const [sub = "status", ...rest] = args.trim().split(/\s+/);
+
+      if (sub === "mount") {
+        // Publishing this session is the host half's job; the two extensions share
+        // the event bus, so the command stays in one place and the bridge in another.
+        pi.events.emit("pinet:mount", { source: "portal" });
+        notify(ctx, "Mounting this session on PiNet…", "info");
+        return;
+      }
 
       if (sub === "setup") {
         try {

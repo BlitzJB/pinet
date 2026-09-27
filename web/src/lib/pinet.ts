@@ -388,7 +388,19 @@ export class PiNetConnection {
     return this.controller!.command(sessionId, "set_thinking", { level });
   }
   /** Ask a host to spawn a new session (session/worktree spawn mode). */
-  async spawn(sessionId: string, options: { name?: string; mode?: string } = {}): Promise<{ sessionId?: string; name?: string }> {
+  /** Subdirectories of a spawner, for the directory picker. Scope is the host's. */
+  async spawnDirs(sessionId: string, path?: string): Promise<{ path?: string; root?: string; entries?: string[]; error?: string }> {
+    if (!this.controller) throw new Error("not connected");
+    if (!this.store(sessionId).get().attached) await this.attach(sessionId, "control");
+    const ack = (await this.controller.command(sessionId, "spawn.dirs", path ? { path } : {})) as
+      | { accepted?: boolean; error?: string; data?: { ok?: boolean; path?: string; root?: string; entries?: string[]; error?: string } }
+      | undefined;
+    if (!ack?.accepted) return { error: ack?.error ?? "unavailable" };
+    if (ack.data?.ok === false) return { error: ack.data.error ?? "unavailable" };
+    return { path: ack.data?.path, root: ack.data?.root, entries: ack.data?.entries };
+  }
+
+  async spawn(sessionId: string, options: { name?: string; mode?: string; dir?: string } = {}): Promise<{ sessionId?: string; name?: string; cwd?: string }> {
     if (!this.controller) throw new Error("not connected");
     // Commands need the session group key. The sidebar can trigger a spawn
     // before the session view has finished attaching, so make sure first.

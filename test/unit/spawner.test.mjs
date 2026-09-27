@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SessionSpawner } from "../../src/host/spawner.mjs";
 
@@ -167,5 +170,97 @@ describe("SessionSpawner with tmux (sessions outlive the spawner)", () => {
     const result = spawner.spawn();
     expect(result).toMatchObject({ ok: true, detached: false });
     expect(spawner.capability().persistent).toBe(false);
+  });
+});
+
+describe("spawner: directory scope", () => {
+  const tree = () => {
+    const root = mkdtempSync(join(tmpdir(), "pinet-scope-"));
+    mkdirSync(join(root, "apps", "web"), { recursive: true });
+    mkdirSync(join(root, "node_modules", "x"), { recursive: true });
+    mkdirSync(join(root, ".git"), { recursive: true });
+    writeFileSync(join(root, "file.txt"), "x");
+    const outside = mkdtempSync(join(tmpdir(), "pinet-outside-"));
+    symlinkSync(outside, join(root, "escape"));
+    return { root, outside };
+  };
+
+  const spawnerFor = (root) => new SessionSpawner({ cwd: root, tmux: null, spawnFn: () => fakeChild(), env: {} });
+
+  it("resolves the root and anything under it", () => {
+    const { root } = tree();
+    const spawner = spawnerFor(root);
+    const real = realpathSync(root);
+    expect(spawner.resolveDir()).toBe(real);
+    expect(spawner.resolveDir(".")).toBe(real);
+    expect(spawner.resolveDir("apps/web")).toBe(join(real, "apps", "web"));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("refuses to escape the scope, by any route", () => {
+    const { root, outside } = tree();
+    const spawner = spawnerFor(root);
+    expect(spawner.resolveDir("..")).toBeUndefined();
+    expect(spawner.resolveDir("../..")).toBeUndefined();
+    expect(spawner.resolveDir("/etc")).toBeUndefined();
+    expect(spawner.resolveDir(outside)).toBeUndefined();
+    // A symlink inside the scope that points outside it is the interesting case.
+    expect(spawner.resolveDir("escape")).toBeUndefined();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("refuses things that are not directories", () => {
+    const { root } = tree();
+    const spawner = spawnerFor(root);
+    expect(spawner.resolveDir("file.txt")).toBeUndefined();
+    expect(spawner.resolveDir("nope")).toBeUndefined();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("lists subdirectories, quietly", () => {
+    const { root } = tree();
+    const { entries, path } = spawnerFor(root).directories();
+    expect(path).toBe(".");
+    expect(entries).toContain("apps");
+    expect(entries).not.toContain("node_modules");
+    expect(entries).not.toContain(".git");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("only lists inside the scope and walks down by relative path", () => {
+    const { root, outside } = tree();
+    const spawner = spawnerFor(root);
+    expect(spawner.directories("../..").ok).toBe(false);
+    expect(spawner.directories(outside).error).toBe("dir_out_of_scope");
+    const nested = spawner.directories("apps");
+    expect(nested.ok).toBe(true);
+    expect(nested.path).toBe("apps");
+    expect(nested.entries).toEqual(["web"]);
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("spawns into the chosen subdirectory", () => {
+    const { root } = tree();
+    const calls = [];
+    const spawner = new SessionSpawner({
+      cwd: root,
+      tmux: "tmux",
+      spawnFn: (bin, args) => {
+        calls.push({ bin, args });
+        return fakeChild();
+      },
+      env: {},
+    });
+    const real = realpathSync(root);
+    const result = spawner.spawn({ dir: "apps/web" });
+    expect(result.ok).toBe(true);
+    expect(result.cwd).toBe(join(real, "apps", "web"));
+    expect(calls[0].args).toContain(join(real, "apps", "web"));
+    // And an escape attempt is refused before anything is spawned.
+    expect(spawner.spawn({ dir: "../.." })).toMatchObject({ ok: false, error: "dir_out_of_scope" });
+    expect(calls).toHaveLength(1);
+    rmSync(root, { recursive: true, force: true });
   });
 });
