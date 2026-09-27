@@ -61,7 +61,6 @@ export function Composer({
   const [thinkingOpen, setThinkingOpen] = useState(false);
   const [confirmCompact, setConfirmCompact] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
   const [polishing, setPolishing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
@@ -107,7 +106,6 @@ export function Composer({
         },
       });
       recorderRef.current = recorder;
-      setElapsed(0);
       setRecording(true);
     } catch (error) {
       setMicError(error instanceof MicError ? error.message : "Could not start recording");
@@ -156,12 +154,6 @@ export function Composer({
     setText((current) => current.slice(0, insertion.start) + current.slice(insertion.end));
     setInsertion(null);
   }
-
-  useEffect(() => {
-    if (!recording) return;
-    const timer = setInterval(() => setElapsed((value) => value + 100), 100);
-    return () => clearInterval(timer);
-  }, [recording]);
 
   // The undo affordance expires so it doesn't linger over the composer.
   useEffect(() => {
@@ -280,12 +272,7 @@ export function Composer({
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
           {(recording || polishing || notice || insertion) && (
             <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/70" role="status" aria-live="polite">
-              {recording && (
-                <span className="flex items-center gap-1.5">
-                  <VoiceWaveform peaks={peaksRef} active={recording} />
-                  <span className="tabular-nums">{(elapsed / 1000).toFixed(1)}s</span>
-                </span>
-              )}
+              {recording && <VoiceWaveform peaks={peaksRef} active={recording} />}
               {!recording && polishing && <span className="truncate">Polishing…</span>}
               {!recording && !polishing && (micError || notice) && (
                 <span className={cn("max-w-[16rem] truncate", micError && !notice && "text-amber-500")}>{notice ?? micError}</span>
