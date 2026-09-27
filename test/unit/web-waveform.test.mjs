@@ -1,38 +1,49 @@
 import { describe, expect, it } from "vitest";
-import { levelSlots } from "../../web/src/lib/waveform.ts";
+import { levelColumns } from "../../web/src/lib/waveform.ts";
 
-describe("waveform geometry", () => {
-  it("puts the newest sample at the right edge", () => {
-    const { half } = levelSlots([0.1, 0.9], { width: 4, height: 10, pitch: 2 });
-    expect(half).toHaveLength(2);
-    expect(half[1]).toBeGreaterThan(half[0]);
+// slots = width/pitch = 4, so 4 columns of 4 samples = 16 samples on screen.
+const opts = { width: 8, height: 21, pitch: 2, samplesPerColumn: 4 };
+const reach = 21 / 2 - 1;
+
+describe("waveform columns", () => {
+  it("aggregates each column over its slice of time", () => {
+    const columns = levelColumns([0.1, 0.2, 0.3, 0.4, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 1, 1, 1, 1], opts).columns;
+    expect(columns.map((value) => +value.toFixed(3))).toEqual([0.25, 0.5, 0, 1]);
   });
 
-  it("shifts what was captured leftwards as new samples arrive", () => {
-    // The point of the component: a new sample must move the existing waveform
-    // left, so the right edge is the live one and the rest is history.
-    const before = levelSlots([0.2, 1, 0.6], { width: 4, height: 10, pitch: 2 });
-    const after = levelSlots([0.2, 1, 0.6, 0.4], { width: 4, height: 10, pitch: 2 });
-    expect(after.half[0]).toBe(before.half[1]); // the previous right edge moved left
-    expect(after.half[1]).toBeGreaterThan(0); // and the new sample took the right edge
-    expect(after.half[1]).toBeLessThan(after.half[0]);
+  it("advances exactly one column per slice, so it scrolls slowly", () => {
+    const base = Array.from({ length: 16 }, (_, i) => i / 16);
+    const advanced = [...base.slice(4), 0.9, 0.9, 0.9, 0.9];
+    expect(levelColumns(advanced, opts).columns[0]).toBeCloseTo(levelColumns(base, opts).columns[1], 6);
+  });
+
+  it("moves less than a full column for a single new sample", () => {
+    const base = Array.from({ length: 16 }, (_, i) => i / 16);
+    const nudged = [...base.slice(1), 0.9];
+    const before = levelColumns(base, opts).columns;
+    const after = levelColumns(nudged, opts).columns;
+    expect(Math.abs(after[0] - before[0])).toBeLessThan(Math.abs(before[1] - before[0]));
+  });
+
+  it("scales to the recent average, so quiet speech still varies", () => {
+    // Four quiet columns, each louder than the last: without an adaptive scale
+    // these would all sit on the floor.
+    const quiet = [0.03, 0.03, 0.03, 0.03, 0.05, 0.05, 0.05, 0.05, 0.07, 0.07, 0.07, 0.07, 0.04, 0.04, 0.04, 0.04];
+    const { half, reference } = levelColumns(quiet, opts);
+    expect(reference).toBeLessThan(0.2); // scaled to this signal, not to full scale
+    expect(Math.max(...half)).toBeGreaterThan(reach * 0.6);
+    expect(Math.max(...half) - Math.min(...half)).toBeGreaterThan(reach * 0.3);
+  });
+
+  it("draws a floor when silent and stays within reach when loud", () => {
+    expect(levelColumns(new Array(16).fill(0), opts).half.every((value) => value === 1)).toBe(true);
+    const loud = levelColumns(new Array(16).fill(1), opts).half;
+    expect(loud.every((value) => value > 0 && value <= reach)).toBe(true);
   });
 
   it("right-aligns a short history instead of stretching it", () => {
-    const { half } = levelSlots([0.5], { width: 8, height: 10, pitch: 2 });
-    expect(half).toHaveLength(4);
-    expect(half.slice(0, 3).every((value) => value === 1)).toBe(true);
-    expect(half[3]).toBeGreaterThan(1);
-  });
-
-  it("draws a floor rather than collapsing when silent", () => {
-    const { half } = levelSlots([0, 0, 0, 0], { width: 8, height: 10, pitch: 2 });
-    expect(half.every((value) => value === 1)).toBe(true);
-  });
-
-  it("clamps out-of-range levels", () => {
-    const { half } = levelSlots([5, -2], { width: 4, height: 10, pitch: 2 });
-    expect(half[0]).toBe(4); // reach = height/2 - minHalf
-    expect(half[1]).toBe(1);
+    const { columns } = levelColumns([0.2, 0.2, 0.2, 0.2], opts);
+    expect(columns.slice(0, 3)).toEqual([0, 0, 0]);
+    expect(columns[3]).toBeCloseTo(0.2, 6);
   });
 });

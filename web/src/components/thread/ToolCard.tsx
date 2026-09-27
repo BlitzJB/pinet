@@ -35,7 +35,7 @@ export const ToolCard = memo(function ToolCard({ name, args, output, error, runn
         <StatusIcon
           className={cn(
             "size-3.5 shrink-0",
-            status === "running" && "animate-spin text-blue-500 motion-reduce:animate-none",
+            status === "running" && "animate-spin text-foreground/70 motion-reduce:animate-none",
             status === "complete" && "text-emerald-500",
             status === "error" && "text-destructive",
           )}

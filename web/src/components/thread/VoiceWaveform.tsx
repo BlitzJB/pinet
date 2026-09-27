@@ -1,6 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { cn } from "../../lib/utils";
-import { levelSlots } from "../../lib/waveform";
+import { levelColumns } from "../../lib/waveform";
 
 /**
  * The captured audio as a scrolling waveform: everything recorded so far is on
@@ -14,7 +14,9 @@ import { levelSlots } from "../../lib/waveform";
  *
  * The history is deliberately *not* faded out: an age gradient made earlier audio
  * invisible, which left only the newest fragment visible and read as a level
- * meter of the current moment instead of a recording.
+ * meter of the current moment instead of a recording. Pacing and scaling live in
+ * lib/waveform.ts — columns aggregate ~400ms each and are scaled against the
+ * recent average, so it scrolls slowly and stays lively at any input level.
  */
 export function VoiceWaveform({
   peaks,
@@ -50,7 +52,7 @@ export function VoiceWaveform({
       context.fillStyle = getComputedStyle(canvas).color;
       context.globalAlpha = active ? 0.95 : 0.55;
 
-      const { slots, pitch, half } = levelSlots(peaks.current ?? [], { width, height });
+      const { slots, pitch, half } = levelColumns(peaks.current ?? [], { width, height });
       const middle = height / 2;
       const x = (index: number) => index * pitch + pitch / 2;
 

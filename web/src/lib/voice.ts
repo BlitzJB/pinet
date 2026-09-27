@@ -19,8 +19,11 @@ const TARGET_RATE = 16_000;
  * against the app base so it works from any route (`/app/s/<id>`).
  */
 const WORKLET_URL = `${import.meta.env.BASE_URL}voice-worklet.js`;
-/** How many level samples the waveform holds. */
-export const WAVEFORM_PEAKS = 96;
+/**
+ * How many level samples to keep. Comfortably more than the waveform shows
+ * (columns x samplesPerColumn), since each column aggregates a slice.
+ */
+export const WAVEFORM_PEAKS = 512;
 
 /** Integer/linear downmix to 16 kHz, keeping phase across chunk boundaries. */
 class Resampler {
@@ -96,7 +99,7 @@ export interface VoiceRecorder {
 
 export interface RecorderOptions {
   onChunk: (chunkBase64: string, index: number) => void;
-  /** Level samples, 0..1, roughly 20 per second. */
+  /** Level samples, 0..1, 20 per second (aggregated into columns for display). */
   onPeaks?: (peaks: number[]) => void;
   onError?: (message: string) => void;
 }

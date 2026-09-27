@@ -7,16 +7,16 @@
 // reported. Do not move this back to a Blob without relaxing the CSP.
 //
 // Two things are posted to the main thread:
-//   * { peaks }  — level samples ~10x/second, for the waveform
+//   * { peaks }  — level samples ~20x/second, for the waveform
 //   * { audio }  — ~250ms of samples, so the main thread gets 4 messages a
 //                  second for audio instead of ~370
 //
 // 128-sample render quanta are used as-is; batching happens here.
 
-// 10 samples/second: with the waveform's 2px pitch that puts a couple of
-// seconds on screen, so it scrolls at the pace a voice recorder does rather
-// than flickering.
-const PEAK_INTERVAL_MS = 100;
+// 20 samples/second. The waveform aggregates 8 of these into each ~400ms column,
+// which is what makes it scroll slowly: one sample nudges the shape, a column
+// advances roughly 2.5 times a second.
+const PEAK_INTERVAL_MS = 50;
 
 class PinetCapture extends AudioWorkletProcessor {
   constructor() {

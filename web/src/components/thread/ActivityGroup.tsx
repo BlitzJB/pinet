@@ -24,7 +24,7 @@ export const ActivityGroup = memo(function ActivityGroup({ items, running }: { i
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-muted-foreground outline-none transition-colors hover:bg-foreground/[0.03]"
       >
         {running ? (
-          <LoaderIcon className="size-3.5 shrink-0 animate-spin text-blue-500 motion-reduce:animate-none" />
+          <LoaderIcon className="size-3.5 shrink-0 animate-spin text-foreground motion-reduce:animate-none" />
         ) : (
           <SparklesIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
         )}
