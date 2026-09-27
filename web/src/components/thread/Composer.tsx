@@ -281,9 +281,8 @@ export function Composer({
           {(recording || polishing || notice || insertion) && (
             <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground/70" role="status" aria-live="polite">
               {recording && (
-                <span className="flex items-center gap-2">
-                  <span aria-hidden className="size-1.5 rounded-full bg-red-500 motion-safe:animate-pulse" />
-                  <VoiceWaveform peaks={peaksRef} active={recording} className="w-24 sm:w-32" />
+                <span className="flex items-center gap-1.5">
+                  <VoiceWaveform peaks={peaksRef} active={recording} />
                   <span className="tabular-nums">{(elapsed / 1000).toFixed(1)}s</span>
                 </span>
               )}
@@ -320,9 +319,6 @@ export function Composer({
               )}
             >
               {polishing ? <LoaderIcon className="size-4 animate-spin motion-reduce:animate-none" /> : <MicIcon className="size-4" />}
-              {recording && (
-                <span aria-hidden className="absolute inset-0 rounded-full ring-1 ring-red-500/40 motion-safe:animate-pulse" />
-              )}
             </button>
           )}
           <ContextMeter usage={contextUsage} compacting={compacting} />
