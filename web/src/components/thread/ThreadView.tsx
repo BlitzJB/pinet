@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownIcon, Loader2Icon } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
+import { getMe, transcribeTake } from "../../lib/api";
 import { useConnectionState, usePiNet, useSessionState } from "../../lib/context";
 import { deriveRunFeedback } from "../../lib/run-state";
 import { ghostButton } from "../ui/surfaces";
@@ -98,6 +100,11 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
       if (timer) clearTimeout(timer);
     };
   }, [conn.status, state.attached, sessionId, connection]);
+
+  // Dictation runs on the hub, so it is available on every host — the session's own
+  // meta only matters for hosts that still do it themselves.
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 300_000 });
+  const voiceEnabled = Boolean(me?.voice?.enabled || state.meta?.voice?.enabled);
 
   const running = state.status?.phase === "running" || state.status?.isIdle === false;
   const model = state.status?.model;
@@ -269,13 +276,9 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
             onStop={() => void connection.abort(sessionId).catch(() => {})}
             onCompact={() => void connection.compact(sessionId).catch(() => {})}
             onThinking={(level) => void connection.setThinking(sessionId, level).catch(() => {})}
-            voiceEnabled={Boolean(state.meta?.voice?.enabled)}
-            voice={state.voice}
-            onVoiceChunk={(chunk, index) => connection.sendVoiceChunk(sessionId, chunk, index)}
-            onVoiceRetry={(spoolId) => void connection.retryVoice(sessionId, spoolId).catch(() => {})}
-            onVoiceEnd={() => void connection.endVoice(sessionId).catch(() => {})}
-            onVoiceCancel={() => void connection.cancelVoice(sessionId).catch(() => {})}
-            onVoiceConsumed={() => connection.clearVoice(sessionId)}
+            voiceEnabled={voiceEnabled}
+
+            onVoiceTake={(chunks) => transcribeTake(chunks)}
           />
           {cwd && (
             <div className="truncate px-1 text-center text-[11px] leading-tight text-muted-foreground/50" title={cwd}>

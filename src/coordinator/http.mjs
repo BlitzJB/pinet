@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { isValidPublicKey } from "../crypto/keys.mjs";
 import { qrSvg } from "./qr.mjs";
 import { createRateLimiter } from "./rate-limit.mjs";
+import { MAX_TAKE_BYTES } from "./voice.mjs";
 
 const DEFAULT_WEB_DIR = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const MAX_BODY_BYTES = 64 * 1024;
@@ -179,12 +180,12 @@ function clientIp(req) {
   return String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket?.remoteAddress || "unknown";
 }
 
-async function readBody(req) {
+async function readBody(req, limit = MAX_BODY_BYTES) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) {
+    if (size > limit) {
       const error = new Error("payload too large");
       error.status = 413;
       throw error;
@@ -300,9 +301,11 @@ function validKeys(body) {
   return isValidPublicKey(body.identityPub, "ed25519") && isValidPublicKey(body.encPub, "x25519");
 }
 
-export function createHttpHandler({ accounts, authService, publicUrl, webDir = DEFAULT_WEB_DIR }) {
+export function createHttpHandler({ accounts, authService, publicUrl, webDir = DEFAULT_WEB_DIR, voice = { enabled: false, side: null } }) {
   const globalLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
   const sensitiveLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+  // Every take costs a provider round trip, so this is deliberately tight.
+  const voiceLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
   const fetchImpl = globalThis.fetch;
   const avatarCache = new Map();
   const avatarHosts = new Set();
@@ -449,8 +452,29 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
         url.pathname === "/auth/mfa/enroll" ||
         url.pathname === "/auth/mfa/activate" ||
         url.pathname.startsWith("/devices") ||
-        url.pathname === "/hosts/enroll/start";
+        url.pathname === "/hosts/enroll/start" ||
+        url.pathname === "/voice/transcribe";
       if (protectedPath && !current) return json(res, 401, { error: "unauthorized" });
+
+      // Dictation, served here rather than on the session's host. Audio arrives on
+      // its own endpoint, so it never enters the end-to-end session channel.
+      if (route === "POST /voice/transcribe") {
+        if (!voice.enabled) return json(res, 503, { error: "voice_disabled" });
+        if (!voiceLimiter.check(`voice:${current.accountId}`)) return json(res, 429, { error: "rate_limited" });
+        let body;
+        try {
+          body = await readBody(req, MAX_TAKE_BYTES);
+        } catch (error) {
+          return json(res, error?.status ?? 400, { error: error?.status === 413 ? "payload_too_large" : "bad_request" });
+        }
+        try {
+          const result = await voice.transcribe({ chunks: body.chunks, sampleRate: body.sampleRate });
+          return json(res, 200, result);
+        } catch (error) {
+          console.error("[hub] voice failed:", String(error?.code ?? error?.message ?? error));
+          return json(res, 502, { error: String(error?.code ?? "voice_failed") });
+        }
+      }
 
       if (route === "GET /me") {
         const account = accounts.getAccount(current.accountId);
@@ -460,6 +484,9 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
           name: account.name,
           avatarUrl: account.picture ? "/me/avatar" : null,
           mfaEnrolled: account.mfa.enrolled,
+          // Where dictation happens, so the client does not have to guess or be
+          // configured per host.
+          voice: { enabled: Boolean(voice.enabled), side: voice.side },
           devices: accounts.listDevices(account.id).map((d) => ({ id: d.id, kind: d.kind, name: d.name, revoked: d.revoked })),
         });
       }

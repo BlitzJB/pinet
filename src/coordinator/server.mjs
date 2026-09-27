@@ -8,6 +8,7 @@ import { AccountStore } from "../auth/accounts.mjs";
 import { GoogleOAuth, GOOGLE_DEFAULTS } from "../auth/google.mjs";
 import { AuthService } from "../auth/service.mjs";
 import { createHttpHandler } from "./http.mjs";
+import { createVoiceService } from "./voice.mjs";
 import { createGateway } from "./ws.mjs";
 
 export function configFromEnv(env = process.env) {
@@ -42,7 +43,11 @@ export async function createCoordinator({ config = configFromEnv(), accounts, go
   const store = accounts ?? new AccountStore({ persistPath: config.dataDir ? join(config.dataDir, "coordinator-store.json") : undefined });
   const googleClient = google ?? new GoogleOAuth({ ...config.google, redirectUri });
   const authService = new AuthService({ accounts: store, google: googleClient, sessionSecret: config.sessionSecret, allowedUsers: config.allowedUsers });
-  const handler = createHttpHandler({ accounts: store, authService, publicUrl, webDir: config.webDir });
+  // Voice runs here, not on the host: one provider key for every host, one hop
+  // instead of two. See src/coordinator/voice.mjs for the trade being made.
+  const voice = createVoiceService({ env: process.env });
+  if (voice.enabled) console.log("[hub] voice: coordinator-side (audio is readable by this server)");
+  const handler = createHttpHandler({ accounts: store, authService, publicUrl, webDir: config.webDir, voice });
   server.on("request", (req, res) => void handler(req, res));
   const publicOrigin = (() => {
     try {

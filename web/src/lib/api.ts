@@ -12,6 +12,8 @@ export interface Me {
   name: string;
   avatarUrl: string | null;
   mfaEnrolled: boolean;
+  /** Where dictation runs, so the client does not guess. */
+  voice?: { enabled: boolean; side: string | null } | null;
   devices: DeviceInfo[];
 }
 
@@ -22,6 +24,33 @@ async function readError(response: Response): Promise<string> {
   } catch {
     return response.statusText;
   }
+}
+
+export interface VoiceTake {
+  text: string;
+  raw?: string;
+  flags?: string[];
+  durationMs?: number;
+  segments?: number;
+}
+
+/**
+ * Dictation. The audio goes to the hub, which runs speech-to-text and the cleanup
+ * pass — the hub holds the provider key, so no host needs one. Nothing is stored
+ * there: the caller keeps the take, which is what makes Retry work.
+ */
+export async function transcribeTake(chunks: string[], sampleRate = 16_000): Promise<VoiceTake> {
+  const response = await fetch("/voice/transcribe", {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chunks, sampleRate }),
+  });
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(detail.error ?? `voice ${response.status}`);
+  }
+  return (await response.json()) as VoiceTake;
 }
 
 export async function getMe(): Promise<Me | null> {

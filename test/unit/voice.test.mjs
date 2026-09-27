@@ -401,3 +401,47 @@ describe("voice: transcription runs in parallel", () => {
     expect(result.rateLimit.requests).toBe(3);
   });
 });
+
+describe("voice on the coordinator", () => {
+  // One key on the hub serves every host, which is the whole point of moving it
+  // off the host: a Mac that has never had a provider key gets dictation.
+  const fakeFetch = (transcript) => async (url) => {
+    if (String(url).includes("/audio/transcriptions")) {
+      return { ok: true, status: 200, headers: new Map(), json: async () => ({ text: transcript }) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: new Map(),
+      json: async () => ({ choices: [{ message: { content: "The PiNet coordinator is fast." } }] }),
+    };
+  };
+
+  it("is disabled without a key, and says so", async () => {
+    const { createVoiceService } = await import("../../src/coordinator/voice.mjs");
+    const service = createVoiceService({ env: {} });
+    expect(service.enabled).toBe(false);
+    expect((await service.transcribe({ chunks: ["AAAA"] })).flags).toContain("voice_disabled");
+  });
+
+  it("turns captured audio into cleaned text", async () => {
+    const { createVoiceService } = await import("../../src/coordinator/voice.mjs");
+    const service = createVoiceService({
+      env: { GROQ_API_KEY: "k" },
+      fetchImpl: fakeFetch("um the pin net coordinator is fast"),
+    });
+    expect(service.enabled).toBe(true);
+    expect(service.side).toBe("coordinator");
+    const pcm = Buffer.alloc(SAMPLE_RATE_HZ * 2 * 2, 7).toString("base64");
+    const result = await service.transcribe({ chunks: [pcm, pcm] });
+    expect(result.text).toBe("The PiNet coordinator is fast.");
+    expect(result.raw).toBe("um the pin net coordinator is fast");
+    expect(result.flags).toEqual([]);
+  });
+
+  it("treats an empty take as nothing said", async () => {
+    const { createVoiceService } = await import("../../src/coordinator/voice.mjs");
+    const service = createVoiceService({ env: { GROQ_API_KEY: "k" }, fetchImpl: fakeFetch("x") });
+    expect((await service.transcribe({ chunks: [] })).flags).toEqual(["no_speech"]);
+  });
+});

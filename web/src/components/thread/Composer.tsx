@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUpIcon, BrainIcon, ChevronDownIcon, LoaderIcon, MicIcon, Minimize2Icon, SquareIcon, Undo2Icon } from "lucide-react";
 import { cn } from "../../lib/utils";
-import type { ModelInfo, VoiceResult } from "../../lib/pinet";
+import type { ModelInfo } from "../../lib/pinet";
 import { appendPeaks, startVoiceRecorder, MicError, type VoiceRecorder } from "../../lib/voice";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -22,18 +22,13 @@ export function Composer({
   contextUsage,
   compacting,
   voiceEnabled,
-  voice,
   onModel,
   loadModels,
   onSend,
   onStop,
   onCompact,
   onThinking,
-  onVoiceChunk,
-  onVoiceRetry,
-  onVoiceEnd,
-  onVoiceCancel,
-  onVoiceConsumed,
+  onVoiceTake,
 }: {
   busy: boolean;
   disabled: boolean;
@@ -45,20 +40,14 @@ export function Composer({
   compacting?: boolean;
   /** The host has a dictation provider configured (from session meta). */
   voiceEnabled?: boolean;
-  /** Latest dictation result from the host; consumed once inserted. */
-  voice?: VoiceResult | null;
   onModel?: (provider: string, modelId: string, name: string) => void;
   loadModels?: (options?: { refresh?: boolean }) => Promise<ModelInfo[]>;
   onSend: (text: string) => void | Promise<void>;
   onStop: () => void;
   onCompact: () => void;
   onThinking: (level: string) => void;
-  onVoiceChunk?: (chunk: string, index: number) => void | Promise<void>;
-  /** Re-run the last take whose transcription failed. */
-  onVoiceRetry?: (spoolId?: string) => void | Promise<void>;
-  onVoiceEnd?: () => void | Promise<void>;
-  onVoiceCancel?: () => void | Promise<void>;
-  onVoiceConsumed?: () => void;
+  /** Send a take for transcription; resolves with the cleaned text. */
+  onVoiceTake?: (chunks: string[]) => Promise<{ text: string; raw?: string; flags?: string[] }>;
 }) {
   const [text, setText] = useState("");
   const [thinkingOpen, setThinkingOpen] = useState(false);
@@ -67,11 +56,11 @@ export function Composer({
   const [polishing, setPolishing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
-  const [retryId, setRetryId] = useState<string | null>(null);
+  const [retryTake, setRetryTake] = useState<string[] | null>(null);
+  const takeRef = useRef<string[]>([]);
   const [insertion, setInsertion] = useState<{ start: number; end: number; at: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recorderRef = useRef<VoiceRecorder | null>(null);
-  const handledAt = useRef<number | null>(null);
   const peaksRef = useRef<number[]>([]);
 
   useLayoutEffect(() => {
@@ -101,8 +90,10 @@ export function Composer({
       // a real permission denial. No host call is needed before capture: the host
       // resets its buffer when chunk index 0 of a new take arrives.
       const recorder = await startVoiceRecorder({
-        onChunk: (chunk, index) => {
-          void onVoiceChunk?.(chunk, index);
+        // Buffered here rather than streamed: the take is sent once, and a failure
+        // can be retried without the audio having gone anywhere.
+        onChunk: (chunk) => {
+          takeRef.current.push(chunk);
         },
         onError: (message) => setNotice(message),
         onPeaks: (peaks) => {
@@ -122,12 +113,40 @@ export function Composer({
     setRecording(false);
     peaksRef.current = [];
     await recorder?.stop();
-    if (cancel) {
-      await onVoiceCancel?.();
-      return;
-    }
+    const take = takeRef.current;
+    takeRef.current = [];
+    if (cancel || !take.length) return;
+    await submitTake(take);
+  }
+
+  /** Transcribe a take and insert the result. The audio stays here for a retry. */
+  async function submitTake(take: string[]) {
     setPolishing(true);
-    await onVoiceEnd?.();
+    setNotice(null);
+    setMicError(null);
+    try {
+      const result = await onVoiceTake?.(take);
+      const flags = result?.flags ?? [];
+      if (!result?.text) {
+        setNotice(
+          flags.includes("no_speech")
+            ? "Didn't catch that"
+            : flags.includes("voice_disabled")
+              ? "Dictation isn't enabled on the hub"
+              : "Couldn't transcribe that",
+        );
+        setRetryTake(take);
+        return;
+      }
+      insertAtCaret(result.text);
+      setRetryTake(null);
+      setNotice(flags.includes("truncated") ? "Only the first ten minutes were used" : null);
+    } catch {
+      setNotice("Couldn't transcribe that");
+      setRetryTake(take);
+    } finally {
+      setPolishing(false);
+    }
   }
 
   /**
@@ -166,32 +185,6 @@ export function Composer({
     return () => clearTimeout(timer);
   }, [insertion]);
 
-  useEffect(() => {
-    if (!voice || typeof voice.at !== "number" || voice.at === handledAt.current) return;
-    handledAt.current = voice.at;
-    setPolishing(false);
-    const flags = voice.flags ?? [];
-    if (!voice.text) {
-      const recoverable = Boolean(voice.spoolId) && (flags.includes("asr_failed") || flags.includes("voice_failed") || flags.includes("empty"));
-      setNotice(
-        flags.includes("no_speech")
-          ? "Didn't catch that"
-          : flags.includes("asr_failed") || flags.includes("voice_failed")
-            ? "Couldn't transcribe that — your audio is saved"
-            : flags.includes("voice_disabled")
-              ? "Dictation isn't configured on this host"
-              : "Didn't catch that",
-      );
-      setRetryId(recoverable ? (voice.spoolId ?? "") : null);
-      onVoiceConsumed?.();
-      return;
-    }
-    insertAtCaret(voice.text);
-    setRetryId(null);
-    setNotice(flags.includes("truncated") ? "Only the first ten minutes were used" : null);
-    onVoiceConsumed?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voice]);
 
   const hasText = text.trim().length > 0;
   // While a run is in flight the button only becomes "stop" when there is
@@ -294,13 +287,13 @@ export function Composer({
               {!recording && !polishing && (micError || notice) && (
                 <span className={cn("max-w-[16rem] truncate", micError && !notice && "text-amber-500")}>{notice ?? micError}</span>
               )}
-              {!recording && !polishing && retryId !== null && (
+              {!recording && !polishing && retryTake && (
                 <button
                   type="button"
                   onClick={() => {
-                    setRetryId(null);
-                    setNotice("Retrying…");
-                    void onVoiceRetry?.(retryId || undefined);
+                    const take = retryTake;
+                    setRetryTake(null);
+                    if (take) void submitTake(take);
                   }}
                   className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] text-muted-foreground underline decoration-dotted transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
                   title="Transcribe the saved audio again"
