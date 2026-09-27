@@ -51,6 +51,10 @@ export interface VoiceResult {
   flags?: string[];
   guard?: { coverage?: number; novelty?: number };
   durationMs?: number;
+  /** Number of ASR requests the take was split into. */
+  segments?: number;
+  /** Spool id: the host still holds this audio, so it can be retried. */
+  spoolId?: string;
   timings?: { asrMs?: number; cleanMs?: number; totalMs?: number };
   /** Local arrival time, used to expire the undo affordance. */
   at?: number;
@@ -315,6 +319,11 @@ export class PiNetConnection {
   /** Finish the utterance; the host answers with a sealed `voice` frame. */
   endVoice(sessionId: string): Promise<unknown> {
     return this.controller!.command(sessionId, "voice.end", {});
+  }
+
+  /** Re-run a take whose transcription failed; the host still has the audio. */
+  retryVoice(sessionId: string, spoolId?: string): Promise<unknown> {
+    return this.controller!.command(sessionId, "voice.retry", spoolId ? { id: spoolId } : {});
   }
 
   cancelVoice(sessionId: string): Promise<unknown> {

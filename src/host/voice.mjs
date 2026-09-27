@@ -19,8 +19,20 @@
 // clean "pin net" it wrote "Pinnet"). Vocabulary therefore has to be stated, not
 // guessed — and stating it is a policy, not a code path.
 
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 export const SAMPLE_RATE = 16_000;
-export const MAX_UTTERANCE_SECONDS = 120;
+/**
+ * One upload per segment. Providers are fast on short audio and unreliable on
+ * long audio, so the *request* is capped here rather than the utterance: a long
+ * take becomes several segments that are transcribed in order and joined. A
+ * single 120s ceiling used to reject the whole take, which is how a long
+ * dictation was lost.
+ */
+export const MAX_SEGMENT_SECONDS = 45;
+/** Overall bound, so a runaway recording cannot make the host work forever. */
+export const MAX_UTTERANCE_SECONDS = 600;
 export const MAX_AUDIO_BYTES = SAMPLE_RATE * 2 * MAX_UTTERANCE_SECONDS;
 /** Cap on a single sealed chunk, matching the coordinator's relay limit. */
 export const MAX_CHUNK_CHARS = 64 * 1024;
@@ -86,15 +98,23 @@ export function pcm16ToWav(pcm, sampleRate = SAMPLE_RATE) {
  * ordered by their index so an out-of-order arrival cannot scramble the audio.
  * Empty input is not an error — it just means "nothing was said".
  */
-export function assembleChunks(chunks, { sampleRate = SAMPLE_RATE, maxBytes = MAX_AUDIO_BYTES } = {}) {
+export function assembleChunks(chunks, { sampleRate = SAMPLE_RATE, maxBytes = MAX_AUDIO_BYTES, truncate = true } = {}) {
   const ordered = [...(chunks ?? [])].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
   const parts = [];
   let total = 0;
+  let truncated = false;
   for (const chunk of ordered) {
     if (typeof chunk?.data !== "string" || !chunk.data) continue;
     const buf = Buffer.from(chunk.data, "base64");
+    if (total + buf.length > maxBytes) {
+      // Truncating keeps the recording recoverable; throwing used to lose the
+      // whole take, which is how a long dictation disappeared.
+      if (!truncate) throw new VoiceError("too_long", `utterance exceeds ${Math.round(maxBytes / (sampleRate * 2))}s`);
+      if (total < maxBytes) parts.push(buf.subarray(0, maxBytes - total));
+      truncated = true;
+      break;
+    }
     total += buf.length;
-    if (total > maxBytes) throw new VoiceError("too_long", `utterance exceeds ${Math.round(maxBytes / (sampleRate * 2))}s`);
     parts.push(buf);
   }
   const pcm = Buffer.concat(parts);
@@ -102,8 +122,230 @@ export function assembleChunks(chunks, { sampleRate = SAMPLE_RATE, maxBytes = MA
     pcm,
     wav: pcm.length ? pcm16ToWav(pcm, sampleRate) : null,
     bytes: pcm.length,
+    truncated,
     durationMs: Math.round((pcm.length / (sampleRate * 2)) * 1000),
   };
+}
+
+/**
+ * A local spool of dictated audio, kept on the machine that captured it.
+ *
+ * Written before transcription, so a provider failure, a crash or a bad
+ * transcript never costs the recording — the take can be retried from here. The
+ * spool is bounded by take count and total bytes and prunes oldest-first,
+ * preferring to drop takes that already transcribed over ones awaiting a retry.
+ * Audio never goes anywhere except the configured provider.
+ */
+export class VoiceSpool {
+  constructor({ dir, maxTakes = 20, maxBytes = 200 * 1024 * 1024 } = {}) {
+    this.dir = dir;
+    this.maxTakes = maxTakes;
+    this.maxBytes = maxBytes;
+    // Same-millisecond takes used to sort by a random suffix, so "newest" and
+    // pruning order were arbitrary. The counter makes ids chronological.
+    this.sequence = 0;
+  }
+
+  get enabled() {
+    return Boolean(this.dir);
+  }
+
+  #path(id, extension) {
+    return join(this.dir, `${id}.${extension}`);
+  }
+
+  /** Persist one take and return its id. */
+  save({ pcm, sampleRate = SAMPLE_RATE, meta = {} }) {
+    if (!this.dir) return undefined;
+    mkdirSync(this.dir, { recursive: true });
+    const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${String(this.sequence++).padStart(4, "0")}-${Math.random().toString(36).slice(2, 6)}`;
+    writeFileSync(this.#path(id, "wav"), pcm16ToWav(pcm, sampleRate));
+    writeFileSync(
+      this.#path(id, "json"),
+      JSON.stringify(
+        {
+          id,
+          createdAt: new Date().toISOString(),
+          durationMs: Math.round((pcm.length / (sampleRate * 2)) * 1000),
+          bytes: pcm.length,
+          status: "pending",
+          attempts: 0,
+          ...meta,
+        },
+        null,
+        2,
+      ),
+    );
+    this.prune();
+    return id;
+  }
+
+  /** Record the outcome alongside the audio. */
+  mark(id, patch) {
+    if (!this.dir || !id) return;
+    try {
+      const meta = JSON.parse(readFileSync(this.#path(id, "json"), "utf8"));
+      writeFileSync(this.#path(id, "json"), JSON.stringify({ ...meta, ...patch }, null, 2));
+    } catch {
+      /* the take was pruned */
+    }
+  }
+
+  /** Read a take back for a retry. */
+  load(id) {
+    if (!this.dir) throw new VoiceError("no_spool");
+    const wav = readFileSync(this.#path(id, "wav"));
+    const meta = JSON.parse(readFileSync(this.#path(id, "json"), "utf8"));
+    return { pcm: wav.subarray(44), meta };
+  }
+
+  list() {
+    if (!this.dir) return [];
+    try {
+      return readdirSync(this.dir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => {
+          try {
+            return JSON.parse(readFileSync(join(this.dir, name), "utf8"));
+          } catch {
+            return undefined;
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => String(b.id).localeCompare(String(a.id)));
+    } catch {
+      return [];
+    }
+  }
+
+  /** The most recent take that still needs transcribing. */
+  latestRetryable() {
+    return this.list().find((entry) => entry.status === "failed" || entry.status === "pending");
+  }
+
+  prune() {
+    if (!this.dir) return;
+    const entries = this.list();
+    let bytes = entries.reduce((total, entry) => total + (entry.bytes ?? 0), 0);
+    // Successfully transcribed takes go first: a failed one is the whole point of
+    // keeping the audio.
+    const removable = [...entries].reverse().sort((a, b) => Number(b.status === "ok") - Number(a.status === "ok"));
+    while (removable.length > this.maxTakes || bytes > this.maxBytes) {
+      const entry = removable.shift();
+      if (!entry) break;
+      bytes -= entry.bytes ?? 0;
+      for (const extension of ["wav", "json"]) {
+        try {
+          rmSync(this.#path(entry.id, extension), { force: true });
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  }
+}
+
+/**
+ * The byte offset to cut at, preferring the quietest moment near `nominalByte` so
+ * a segment boundary lands in a pause rather than inside a word.
+ */
+export function findCutPoint(pcm, nominalByte, { sampleRate = SAMPLE_RATE, searchSeconds = 1.5, windowMs = 20 } = {}) {
+  const bytesPerSample = 2;
+  const searchBytes = Math.round(sampleRate * searchSeconds) * bytesPerSample;
+  const windowSamples = Math.max(1, Math.round((sampleRate * windowMs) / 1000));
+  const from = Math.max(0, nominalByte - searchBytes) / bytesPerSample;
+  const to = Math.min(pcm.length, nominalByte + searchBytes) / bytesPerSample;
+  if (to - from <= windowSamples) return nominalByte;
+  const step = Math.max(1, Math.floor(windowSamples / 2));
+  const windows = [];
+  let quietest = Infinity;
+  for (let sample = from; sample + windowSamples <= to; sample += step) {
+    let energy = 0;
+    for (let i = 0; i < windowSamples; i += 1) {
+      const value = pcm.readInt16LE((sample + i) * bytesPerSample);
+      energy += value * value;
+    }
+    const byte = (sample + Math.floor(windowSamples / 2)) * bytesPerSample;
+    windows.push({ byte, energy });
+    if (energy < quietest) quietest = energy;
+  }
+  // Among windows that are as quiet as the quietest (uniform audio has no clear
+  // pause), take the one nearest the nominal boundary. Picking the first match
+  // instead made every cut creep backwards, segment after segment.
+  const threshold = quietest * 1.2 + 1;
+  let bestByte = nominalByte;
+  let bestDistance = Infinity;
+  for (const window of windows) {
+    if (window.energy > threshold) continue;
+    const distance = Math.abs(window.byte - nominalByte);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestByte = window.byte;
+    }
+  }
+  return bestByte;
+}
+
+/**
+ * Split PCM into provider-sized segments, cutting near silence. Every byte is
+ * kept and each segment is at least half a segment long, so this always
+ * progresses.
+ */
+export function splitPcm(pcm, { sampleRate = SAMPLE_RATE, segmentSeconds = MAX_SEGMENT_SECONDS } = {}) {
+  const bytesPerSegment = sampleRate * 2 * segmentSeconds;
+  const segments = [];
+  let start = 0;
+  while (start < pcm.length) {
+    const nominal = start + bytesPerSegment;
+    if (nominal >= pcm.length) {
+      segments.push(pcm.subarray(start));
+      break;
+    }
+    const end = Math.max(start + Math.floor(bytesPerSegment / 2), Math.min(findCutPoint(pcm, nominal, { sampleRate }), pcm.length));
+    segments.push(pcm.subarray(start, end));
+    start = end;
+  }
+  // A sliver at the end is not worth a provider round trip; fold it in.
+  const minTail = sampleRate * 2 * 2;
+  if (segments.length > 1 && segments[segments.length - 1].length < minTail) {
+    const tail = segments.pop();
+    segments[segments.length - 1] = Buffer.concat([segments[segments.length - 1], tail]);
+  }
+  return segments;
+}
+
+const normaliseWord = (word) => word.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
+
+/**
+ * The words a segment repeats from the end of the previous one. Whisper restarts
+ * each request without knowing what came before, so a sentence spanning a cut is
+ * often echoed; this is the "chunk intelligence" that keeps the join clean.
+ */
+export function seamOverlap(previous, next, maxWords = 8) {
+  const a = String(previous ?? "").split(/\s+/).filter(Boolean);
+  const b = String(next ?? "").split(/\s+/).filter(Boolean);
+  for (let count = Math.min(maxWords, a.length, b.length); count >= 1; count -= 1) {
+    const tail = a.slice(-count).map(normaliseWord).join(" ");
+    const head = b.slice(0, count).map(normaliseWord).join(" ");
+    if (tail && tail === head) return b.slice(0, count).join(" ");
+  }
+  return "";
+}
+
+/** Join segment transcripts in order, dropping anything duplicated at a seam. */
+export function joinTranscripts(parts, { maxWords = 8 } = {}) {
+  const kept = [];
+  for (const part of parts ?? []) {
+    const text = String(part ?? "").trim();
+    if (!text) continue;
+    if (!kept.length) {
+      kept.push(text);
+      continue;
+    }
+    const overlap = seamOverlap(kept[kept.length - 1], text, maxWords);
+    kept.push(overlap ? text.slice(overlap.length).trim() : text);
+  }
+  return kept.join(" ").replace(/\s+/g, " ").trim();
 }
 
 /** A short hotword hint for the STT provider (Whisper's prompt is ~224 tokens). */
@@ -220,7 +462,7 @@ export function createTranscriber({ apiKey, model = "whisper-large-v3-turbo", ba
   if (!apiKey) throw new VoiceError("no_asr_key");
   return {
     model,
-    async transcribe(wav, { prompt, signal } = {}) {
+    async transcribe(wav, { prompt, signal, onMeta } = {}) {
       const form = new FormData();
       form.append("file", new Blob([wav], { type: "audio/wav" }), "utterance.wav");
       form.append("model", model);
@@ -232,7 +474,12 @@ export function createTranscriber({ apiKey, model = "whisper-large-v3-turbo", ba
         body: form,
         signal,
       });
-      if (!res.ok) throw new VoiceError("asr_failed", `asr ${res.status}`);
+      onMeta?.({ status: res.status, headers: res.headers });
+      if (!res.ok) {
+        const error = new VoiceError("asr_failed", `asr ${res.status}`);
+        error.retryable = res.status === 429 || res.status >= 500;
+        throw error;
+      }
       const json = await res.json().catch(() => null);
       return String(json?.text ?? "").trim();
     },
@@ -272,46 +519,194 @@ export function createCleaner({ apiKey, model = "qwen/qwen3.8-27b", baseUrl = "h
  * Audio chunks → transcript → cleaned text, with timings so the caller can log
  * where the latency went.
  */
+/** "1.2s" / "500ms" / "2m59.56s" → milliseconds, as Groq's reset headers use. */
+export function parseDuration(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return undefined;
+  const match = /^(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/.exec(text);
+  if (match) return (Number(match[1] ?? 0) * 60 + Number(match[2] ?? 0)) * 1000;
+  const ms = /^(\d+(?:\.\d+)?)ms$/.exec(text);
+  return ms ? Number(ms[1]) : undefined;
+}
+
+/** "30" (seconds) or an HTTP date, per RFC 9110. */
+export function parseRetryAfter(value, now = Date.now()) {
+  const text = String(value ?? "").trim();
+  if (!text) return undefined;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(text);
+  return Number.isFinite(date) ? Math.max(0, date - now) : undefined;
+}
+
+/**
+ * Paces transcription requests against the provider's own rate-limit signals
+ * rather than guessing with blind sleeps.
+ *
+ * - A fixed concurrency ceiling keeps the burst small.
+ * - `429` (or a `retry-after`) closes a gate until the provider's stated reset,
+ *   and halves concurrency; each success adds one back.
+ * - The `x-ratelimit-remaining-*` / `-reset-*` headers close the gate *before*
+ *   the limit is hit, so a long take queues instead of failing.
+ */
+export class RateLimiter {
+  constructor({ concurrency = 4, minConcurrency = 1, now = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+    this.maxConcurrency = concurrency;
+    this.concurrency = concurrency;
+    this.minConcurrency = minConcurrency;
+    this.now = now;
+    this.sleep = sleep;
+    this.requests = 0;
+    this.throttled = 0;
+    this.gateUntil = 0;
+    this.queue = [];
+    this.active = 0;
+    this.timer = undefined;
+  }
+
+  get stats() {
+    return { concurrency: this.concurrency, requests: this.requests, throttled: this.throttled, queued: this.queue.length };
+  }
+
+  acquire() {
+    return new Promise((resolve) => {
+      this.queue.push(resolve);
+      this.#pump();
+    });
+  }
+
+  release() {
+    this.active = Math.max(0, this.active - 1);
+    this.#pump();
+  }
+
+  /** Wait until the gate opens — used between retries so the delay is the provider's. */
+  async waitForGate() {
+    for (;;) {
+      const remaining = this.gateUntil - this.now();
+      if (remaining <= 0) return;
+      await this.sleep(remaining);
+    }
+  }
+
+  /** Feed back what the provider said, so the next dispatch is better informed. */
+  observe({ status, headers } = {}) {
+    const header = (name) => (typeof headers?.get === "function" ? headers.get(name) : headers?.[name]);
+    if (status === 429) {
+      this.throttled += 1;
+      this.concurrency = Math.max(this.minConcurrency, Math.floor(this.concurrency / 2));
+      const until = this.now() + Math.max(parseRetryAfter(header("retry-after"), this.now()) ?? 0, parseDuration(header("x-ratelimit-reset-requests")) ?? 0, 250);
+      this.gateUntil = Math.max(this.gateUntil, until);
+      this.#pump();
+      return;
+    }
+    if (typeof status === "number" && status < 400) {
+      if (this.concurrency < this.maxConcurrency) this.concurrency += 1;
+      // Hold back before the ceiling is reached rather than after a 429.
+      const remaining = Number(header("x-ratelimit-remaining-requests"));
+      const resetIn = parseDuration(header("x-ratelimit-reset-requests"));
+      if (Number.isFinite(remaining) && remaining <= 1 && resetIn) this.gateUntil = Math.max(this.gateUntil, this.now() + resetIn);
+    }
+  }
+
+  #pump() {
+    if (this.timer) return;
+    if (!this.queue.length) return;
+    const wait = this.gateUntil - this.now();
+    if (wait > 0) {
+      this.timer = setTimeout(() => {
+        this.timer = undefined;
+        this.#pump();
+      }, wait);
+      this.timer.unref?.();
+      return;
+    }
+    while (this.queue.length && this.active < this.concurrency) {
+      this.active += 1;
+      this.requests += 1;
+      this.queue.shift()();
+    }
+  }
+}
+
+/** Transient failures worth another attempt; anything else is reported at once. */
+const isRetryable = (error) => error?.retryable === true;
+const delay = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener?.("abort", () => {
+      clearTimeout(timer);
+      reject(new VoiceError("aborted"));
+    });
+  });
+
 export class VoicePipeline {
-  constructor({ transcriber, cleaner, policies = DEFAULT_POLICIES, maxBytes = MAX_AUDIO_BYTES } = {}) {
+  constructor({ transcriber, cleaner, policies = DEFAULT_POLICIES, maxBytes = MAX_AUDIO_BYTES, attempts = 3, concurrency = 4, limiter } = {}) {
     this.transcriber = transcriber;
     this.cleaner = cleaner;
     this.policies = { ...DEFAULT_POLICIES, ...policies };
     this.maxBytes = maxBytes;
+    this.attempts = attempts;
+    this.limiter = limiter ?? new RateLimiter({ concurrency });
   }
 
   get enabled() {
     return Boolean(this.transcriber && this.cleaner);
   }
 
-  async finish(chunks, { context, signal } = {}) {
-    const started = Date.now();
-    const audio = assembleChunks(chunks, { maxBytes: this.maxBytes });
-    if (!audio.wav) return { text: "", raw: "", flags: ["no_speech"], timings: { totalMs: Date.now() - started } };
-
-    const asrAt = Date.now();
-    const raw = await this.transcriber.transcribe(audio.wav, { prompt: hotwordHint(this.policies), signal });
-    const asrMs = Date.now() - asrAt;
-    if (!raw) {
-      return { text: "", raw: "", flags: ["no_speech"], durationMs: audio.durationMs, timings: { asrMs, totalMs: Date.now() - started } };
+  /**
+   * One segment. Retries wait on the limiter's gate rather than a fixed backoff,
+   * so the pause is the one the provider actually asked for.
+   */
+  async #transcribeSegment(segment, prompt, signal) {
+    let last;
+    for (let attempt = 1; attempt <= this.attempts; attempt += 1) {
+      try {
+        return await this.transcriber.transcribe(pcm16ToWav(segment), {
+          prompt,
+          signal,
+          onMeta: (meta) => this.limiter.observe(meta),
+        });
+      } catch (error) {
+        last = error;
+        if (!isRetryable(error) || attempt === this.attempts) break;
+        await this.limiter.waitForGate();
+      }
     }
+    throw last;
+  }
 
+  /**
+   * Transcribe every segment, in parallel, paced by the limiter, then join the
+   * transcripts in order. Segments are cut near silence, so a request rarely
+   * begins mid-sentence; whatever is duplicated across a seam is dropped.
+   */
+  async #transcribe(pcm, { signal } = {}) {
+    const segments = splitPcm(pcm);
+    const prompt = hotwordHint(this.policies);
+    const results = await Promise.all(
+      segments.map(async (_segment, index) => {
+        await this.limiter.acquire();
+        try {
+          return await this.#transcribeSegment(segments[index], prompt, signal);
+        } finally {
+          this.limiter.release();
+        }
+      }),
+    );
+    return { raw: joinTranscripts(results), segments: segments.length };
+  }
+
+  /** Transcript → cleaned text, with the guard. Never throws for a bad polish. */
+  async #clean(raw, { context, signal, asrMs, started } = {}) {
     const cleanAt = Date.now();
     let cleaned;
     try {
       cleaned = await this.cleaner.clean(raw, { system: buildCleanupPrompt({ policies: this.policies, context }), signal });
     } catch (error) {
       // A failed polish must not lose what was said: hand back the transcript.
-      return {
-        text: raw,
-        raw,
-        flags: ["cleanup_failed", String(error?.code ?? "error")],
-        durationMs: audio.durationMs,
-        timings: { asrMs, totalMs: Date.now() - started },
-      };
+      return { text: raw, raw, flags: ["cleanup_failed", String(error?.code ?? "error")], timings: { asrMs, totalMs: Date.now() - started } };
     }
-    const cleanMs = Date.now() - cleanAt;
-
     const guard = guardResult(raw, cleaned);
     const blocked = guard.reasons.includes("empty") || guard.reasons.includes("meta");
     return {
@@ -319,9 +714,65 @@ export class VoicePipeline {
       raw,
       flags: guard.ok ? [] : guard.reasons,
       guard: { coverage: guard.coverage, novelty: guard.novelty },
-      durationMs: audio.durationMs,
-      timings: { asrMs, cleanMs, totalMs: Date.now() - started },
+      timings: { asrMs, cleanMs: Date.now() - cleanAt, totalMs: Date.now() - started },
     };
+  }
+
+  async #run(pcm, { context, signal, started = Date.now(), segments: known, truncated } = {}) {
+    const asrAt = Date.now();
+    const { raw, segments } = await this.#transcribe(pcm, { signal });
+    const asrMs = Date.now() - asrAt;
+    const flags = truncated ? ["truncated"] : [];
+    if (!raw) {
+      return { text: "", raw: "", flags: [...flags, "no_speech"], durationMs: Math.round((pcm.length / (SAMPLE_RATE * 2)) * 1000), segments: segments ?? known, timings: { asrMs, totalMs: Date.now() - started } };
+    }
+    const cleaned = await this.#clean(raw, { context, signal, asrMs, started });
+    return {
+      ...cleaned,
+      flags: [...flags, ...cleaned.flags],
+      durationMs: Math.round((pcm.length / (SAMPLE_RATE * 2)) * 1000),
+      segments: segments ?? known,
+      rateLimit: this.limiter.stats,
+    };
+  }
+
+  /**
+   * Audio in, cleaned text out. The recording is spooled before any provider is
+   * called, so a failure downstream costs a retry, not the take.
+   */
+  async finish(chunks, { context, signal, spool } = {}) {
+    const started = Date.now();
+    const audio = assembleChunks(chunks, { maxBytes: this.maxBytes });
+    if (!audio.wav) return { text: "", raw: "", flags: ["no_speech"], timings: { totalMs: Date.now() - started } };
+
+    const spoolId = spool?.save({ pcm: audio.pcm, meta: { context: context?.cwd ?? null, truncated: Boolean(audio.truncated) } });
+    try {
+      const result = await this.#run(audio.pcm, { context, signal, started, truncated: audio.truncated });
+      spool?.mark(spoolId, { status: result.text ? "ok" : "empty", raw: result.raw, text: result.text, segments: result.segments, flags: result.flags });
+      return { ...result, spoolId };
+    } catch (error) {
+      // Keep the audio and the reason: this is what makes a retry possible.
+      spool?.mark(spoolId, { status: "failed", error: String(error?.code ?? error?.message ?? error) });
+      throw error;
+    }
+  }
+
+  /** Re-run a spooled take (see VoiceSpool). */
+  async retry(spoolId, { context, signal, spool } = {}) {
+    if (!spool?.enabled) throw new VoiceError("no_spool");
+    const id = spoolId ?? spool.latestRetryable()?.id;
+    if (!id) throw new VoiceError("nothing_to_retry");
+    const { pcm } = spool.load(id);
+    const started = Date.now();
+    spool.mark(id, { status: "pending", attempts: 1 });
+    try {
+      const result = await this.#run(pcm, { context, signal, started });
+      spool.mark(id, { status: result.text ? "ok" : "empty", raw: result.raw, text: result.text, segments: result.segments, flags: result.flags });
+      return { ...result, spoolId: id, retried: true };
+    } catch (error) {
+      spool.mark(id, { status: "failed", error: String(error?.code ?? error?.message ?? error) });
+      throw error;
+    }
   }
 }
 

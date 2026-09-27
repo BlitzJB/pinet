@@ -30,6 +30,7 @@ export function Composer({
   onCompact,
   onThinking,
   onVoiceChunk,
+  onVoiceRetry,
   onVoiceEnd,
   onVoiceCancel,
   onVoiceConsumed,
@@ -53,6 +54,8 @@ export function Composer({
   onCompact: () => void;
   onThinking: (level: string) => void;
   onVoiceChunk?: (chunk: string, index: number) => void | Promise<void>;
+  /** Re-run the last take whose transcription failed. */
+  onVoiceRetry?: (spoolId?: string) => void | Promise<void>;
   onVoiceEnd?: () => void | Promise<void>;
   onVoiceCancel?: () => void | Promise<void>;
   onVoiceConsumed?: () => void;
@@ -64,6 +67,7 @@ export function Composer({
   const [polishing, setPolishing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
+  const [retryId, setRetryId] = useState<string | null>(null);
   const [insertion, setInsertion] = useState<{ start: number; end: number; at: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recorderRef = useRef<VoiceRecorder | null>(null);
@@ -166,12 +170,25 @@ export function Composer({
     if (!voice || typeof voice.at !== "number" || voice.at === handledAt.current) return;
     handledAt.current = voice.at;
     setPolishing(false);
+    const flags = voice.flags ?? [];
     if (!voice.text) {
-      setNotice("Didn't catch that");
+      const recoverable = Boolean(voice.spoolId) && (flags.includes("asr_failed") || flags.includes("voice_failed") || flags.includes("empty"));
+      setNotice(
+        flags.includes("no_speech")
+          ? "Didn't catch that"
+          : flags.includes("asr_failed") || flags.includes("voice_failed")
+            ? "Couldn't transcribe that — your audio is saved"
+            : flags.includes("voice_disabled")
+              ? "Dictation isn't configured on this host"
+              : "Didn't catch that",
+      );
+      setRetryId(recoverable ? (voice.spoolId ?? "") : null);
       onVoiceConsumed?.();
       return;
     }
     insertAtCaret(voice.text);
+    setRetryId(null);
+    setNotice(flags.includes("truncated") ? "Only the first ten minutes were used" : null);
     onVoiceConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice]);
@@ -276,6 +293,20 @@ export function Composer({
               {!recording && polishing && <span className="truncate">Polishing…</span>}
               {!recording && !polishing && (micError || notice) && (
                 <span className={cn("max-w-[16rem] truncate", micError && !notice && "text-amber-500")}>{notice ?? micError}</span>
+              )}
+              {!recording && !polishing && retryId !== null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRetryId(null);
+                    setNotice("Retrying…");
+                    void onVoiceRetry?.(retryId || undefined);
+                  }}
+                  className="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] text-muted-foreground underline decoration-dotted transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+                  title="Transcribe the saved audio again"
+                >
+                  Retry
+                </button>
               )}
               {!recording && !polishing && insertion && (
                 <button

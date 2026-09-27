@@ -21,7 +21,7 @@ import { resolveDelivery } from "../src/host/delivery.mjs";
 import { clearHostState, ensureHostKeys, enrollHostWithCode, loadHostState, onboardHost, saveHostState } from "../src/host/onboarding.mjs";
 import { SessionSpawner, detectGit, detectTmux } from "../src/host/spawner.mjs";
 import { HISTORY_PAGE_SIZE, INITIAL_ENTRY_LIMIT, historyWindow } from "../src/host/history.mjs";
-import { DEFAULT_POLICIES, VoicePipeline, createCleaner, createTranscriber, resolveApiKey } from "../src/host/voice.mjs";
+import { DEFAULT_POLICIES, VoicePipeline, VoiceSpool, createCleaner, createTranscriber, resolveApiKey } from "../src/host/voice.mjs";
 
 type Json = Record<string, unknown>;
 type Pi = ExtensionAPI;
@@ -111,10 +111,20 @@ export default function pinet(pi: Pi): void {
           }),
           policies: { ...DEFAULT_POLICIES, terms: voiceTerms() },
         });
-  // One session per process, so one buffer. ~250ms chunks, capped at two minutes
-  // by the pipeline's byte limit.
+  // Every take is written here before a provider is called, so a failure costs a
+  // retry rather than the recording. Stays on this machine; bounded and pruned.
+  const voiceSpool =
+    process.env.PINET_VOICE_SPOOL === "off"
+      ? undefined
+      : new VoiceSpool({
+          dir: process.env.PINET_VOICE_SPOOL_DIR ?? `${dir}/voice`,
+          maxTakes: Number(process.env.PINET_VOICE_SPOOL_MAX ?? 20),
+        });
+  // One session per process, so one buffer. ~250ms chunks; the pipeline's byte
+  // limit is the real bound (ten minutes), this just stops the array growing
+  // without limit if frames arrive after a take ends.
   let audioChunks: { index: number; data: string }[] = [];
-  const MAX_AUDIO_CHUNKS = 1024;
+  const MAX_AUDIO_CHUNKS = 4096;
 
   // Session spawner (see src/host/spawner.mjs). `PINET_SPAWN_MODE=off` disables it.
   const spawner = new SessionSpawner({
@@ -461,6 +471,11 @@ export default function pinet(pi: Pi): void {
       case "voice.cancel":
         takeAudio();
         return { accepted: true, mode: null };
+      case "voice.retry": {
+        if (!voiceSpool?.enabled) return { accepted: false, mode: null, error: "no_spool" };
+        void retryVoice(ctx, typeof args.id === "string" ? args.id : undefined);
+        return { accepted: true, mode: null };
+      }
       case "voice.end": {
         // Fire-and-forget from the caller's perspective: the transcript arrives
         // as a sealed `session.voice` frame, never in this (plaintext) ack.
@@ -766,16 +781,29 @@ export default function pinet(pi: Pi): void {
       return;
     }
     try {
-      const result = await voicePipeline.finish(chunks, { context: { cwd: ctx.cwd } });
+      const result = await voicePipeline.finish(chunks, { context: { cwd: ctx.cwd }, spool: voiceSpool });
       trace(
         "voice",
-        `chunks=${chunks.length} duration=${result.durationMs ?? 0}ms asr=${result.timings?.asrMs ?? 0}ms clean=${result.timings?.cleanMs ?? 0}ms total=${result.timings?.totalMs ?? 0}ms flags=${result.flags.join(",") || "-"}`,
+        `chunks=${chunks.length} duration=${result.durationMs ?? 0}ms segments=${result.segments ?? 1} rl=${result.rateLimit?.concurrency ?? 0}c/${result.rateLimit?.throttled ?? 0}t asr=${result.timings?.asrMs ?? 0}ms clean=${result.timings?.cleanMs ?? 0}ms total=${result.timings?.totalMs ?? 0}ms flags=${result.flags.join(",") || "-"}`,
       );
       safe(() => bridge?.publishVoice(result));
     } catch (error) {
       const code = (error as { code?: string })?.code ?? "voice_failed";
       reportError("voice", error);
       safe(() => bridge?.publishVoice({ text: "", raw: "", flags: [code] }));
+    }
+  }
+
+  /** Re-run a take that failed: the audio is still in the spool. */
+  async function retryVoice(ctx: ExtensionContext, spoolId?: string): Promise<void> {
+    if (!voicePipeline || !voiceSpool) return;
+    try {
+      const result = await voicePipeline.retry(spoolId, { context: { cwd: ctx.cwd }, spool: voiceSpool });
+      trace("voice retry", `id=${result.spoolId} duration=${result.durationMs ?? 0}ms asr=${result.timings?.asrMs ?? 0}ms flags=${result.flags.join(",") || "-"}`);
+      safe(() => bridge?.publishVoice(result));
+    } catch (error) {
+      reportError("voice retry", error);
+      safe(() => bridge?.publishVoice({ text: "", raw: "", flags: [(error as { code?: string })?.code ?? "voice_failed"] }));
     }
   }
 

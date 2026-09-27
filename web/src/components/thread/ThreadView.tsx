@@ -272,6 +272,7 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
             voiceEnabled={Boolean(state.meta?.voice?.enabled)}
             voice={state.voice}
             onVoiceChunk={(chunk, index) => connection.sendVoiceChunk(sessionId, chunk, index)}
+            onVoiceRetry={(spoolId) => void connection.retryVoice(sessionId, spoolId).catch(() => {})}
             onVoiceEnd={() => void connection.endVoice(sessionId).catch(() => {})}
             onVoiceCancel={() => void connection.cancelVoice(sessionId).catch(() => {})}
             onVoiceConsumed={() => connection.clearVoice(sessionId)}

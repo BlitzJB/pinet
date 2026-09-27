@@ -1,11 +1,22 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_POLICIES,
+  RateLimiter,
+  SAMPLE_RATE as SAMPLE_RATE_HZ,
   MAX_AUDIO_BYTES,
   VoiceError,
   VoicePipeline,
+  VoiceSpool,
   assembleChunks,
   buildCleanupPrompt,
+  findCutPoint,
+  joinTranscripts,
+  parseDuration,
+  parseRetryAfter,
+  splitPcm,
   guardResult,
   hotwordHint,
   pcm16ToWav,
@@ -14,6 +25,9 @@ import {
 
 const pcm = (samples) => Buffer.from(Int16Array.from(samples).buffer);
 const b64 = (buf) => Buffer.from(buf).toString("base64");
+// Sample well inside a segment: cuts deliberately straddle the boundary by up to
+// one 20ms window, so the first byte is not a reliable marker.
+const marker = (wav) => wav.readUInt8(44 + Math.floor((wav.length - 44) / 2));
 
 describe("voice: audio assembly", () => {
   it("wraps PCM in a valid mono WAV header", () => {
@@ -46,9 +60,13 @@ describe("voice: audio assembly", () => {
     expect(out.bytes).toBe(0);
   });
 
-  it("refuses an utterance beyond the cap", () => {
-    const huge = Buffer.alloc(MAX_AUDIO_BYTES + 2).toString("base64");
-    expect(() => assembleChunks([{ index: 0, data: huge }])).toThrow(VoiceError);
+  it("truncates at the cap rather than discarding the take", () => {
+    // Throwing here used to lose a long dictation entirely.
+    const huge = Buffer.alloc(MAX_AUDIO_BYTES + 6000).toString("base64");
+    const out = assembleChunks([{ index: 0, data: huge }]);
+    expect(out.truncated).toBe(true);
+    expect(out.bytes).toBe(MAX_AUDIO_BYTES);
+    expect(() => assembleChunks([{ index: 0, data: huge }], { truncate: false })).toThrow(VoiceError);
   });
 });
 
@@ -161,5 +179,225 @@ describe("voice: key resolution", () => {
     expect(resolveApiKey({ env: { GROQ_API_KEY: "env-key" } })).toBe("env-key");
     expect(resolveApiKey({ env: {}, readAuth: () => ({ groq: { key: "auth-key" } }) })).toBe("auth-key");
     expect(resolveApiKey({ env: {}, readAuth: () => { throw new Error("no file"); } })).toBeUndefined();
+  });
+});
+
+describe("voice: long takes are segmented, not rejected", () => {
+  const seconds = (count) => Buffer.alloc(SAMPLE_RATE_HZ * 2 * count, 1);
+
+  it("splits into provider-sized segments and keeps every byte", () => {
+    const pcm = seconds(100);
+    const segments = splitPcm(pcm);
+    expect(segments.length).toBeGreaterThan(1);
+    expect(Buffer.concat(segments).length).toBe(pcm.length);
+    // The last segment is whatever is left over, so only the others are full-size.
+    for (const segment of segments.slice(0, -1)) expect(segment.length).toBeGreaterThanOrEqual(SAMPLE_RATE_HZ * 2 * 22);
+    for (const segment of segments) expect(segment.length).toBeLessThanOrEqual(SAMPLE_RATE_HZ * 2 * 47);
+    for (const segment of segments) expect(segment.length).toBeGreaterThan(0);
+  });
+
+  it("prefers to cut in a pause, so words are not split", () => {
+    // Loud, then a silent gap, then loud again. The nominal cut lands in the gap.
+    const loud = Buffer.alloc(SAMPLE_RATE_HZ * 2 * 2, 0);
+    for (let i = 0; i < loud.length; i += 2) loud.writeInt16LE(9000, i);
+    const quiet = Buffer.alloc(SAMPLE_RATE_HZ * 2, 0);
+    const pcm = Buffer.concat([loud, quiet, loud]);
+    const cut = findCutPoint(pcm, loud.length + SAMPLE_RATE_HZ); // 1s into the gap
+    expect(cut).toBeGreaterThanOrEqual(loud.length);
+    expect(cut).toBeLessThanOrEqual(loud.length + quiet.length);
+  });
+
+  it("transcribes every segment and joins the transcripts in order", async () => {
+    // Each 45s region carries a different byte, so the transcript proves both that
+    // every segment was sent and that they were joined in order. (Identical
+    // outputs would be collapsed by the seam de-duplication.)
+    const region = (byte, count) => Buffer.alloc(SAMPLE_RATE_HZ * 2 * count, byte);
+    const pcm = Buffer.concat([region(1, 45), region(2, 45), region(3, 20)]);
+    const pipeline = new VoicePipeline({
+      transcriber: { transcribe: async (wav) => `s${marker(wav)}` },
+      cleaner: { clean: async (raw) => raw },
+    });
+    const result = await pipeline.finish([{ index: 0, data: pcm.toString("base64") }]);
+    expect(result.segments).toBe(3);
+    expect(result.raw).toBe("s1 s2 s3");
+    expect(result.flags).toEqual([]);
+  });
+});
+
+describe("voice: retries and the local spool", () => {
+  const sample = () => Buffer.alloc(SAMPLE_RATE_HZ * 2, 3).toString("base64");
+  const dir = () => mkdtempSync(join(tmpdir(), "pinet-spool-"));
+
+  it("retries a transient provider failure", async () => {
+    let attempts = 0;
+    const pipeline = new VoicePipeline({
+      attempts: 3,
+      retryDelayMs: 1,
+      transcriber: {
+        transcribe: async () => {
+          attempts += 1;
+          if (attempts === 1) throw Object.assign(new VoiceError("asr_failed", "asr 429"), { retryable: true });
+          return "the words";
+        },
+      },
+      cleaner: { clean: async (raw) => raw },
+    });
+    expect((await pipeline.finish([{ index: 0, data: sample() }])).text).toBe("the words");
+    expect(attempts).toBe(2);
+  });
+
+  it("saves the audio before transcribing, so a failure keeps the take", async () => {
+    const spoolDir = dir();
+    const spool = new VoiceSpool({ dir: spoolDir });
+    const pipeline = new VoicePipeline({
+      attempts: 1,
+      transcriber: { transcribe: async () => { throw new VoiceError("asr_failed", "asr 500"); } },
+      cleaner: { clean: async (raw) => raw },
+    });
+    await expect(pipeline.finish([{ index: 0, data: sample() }], { spool })).rejects.toThrow(VoiceError);
+
+    const [entry] = spool.list();
+    expect(entry.status).toBe("failed");
+    expect(entry.error).toContain("asr_failed");
+    // ...and the WAV is still readable for a retry.
+    const { pcm } = spool.load(entry.id);
+    expect(pcm.length).toBe(SAMPLE_RATE_HZ * 2);
+    rmSync(spoolDir, { recursive: true, force: true });
+  });
+
+  it("retries a spooled take and marks it ok", async () => {
+    const spoolDir = dir();
+    const spool = new VoiceSpool({ dir: spoolDir });
+    let working = false;
+    const pipeline = new VoicePipeline({
+      attempts: 1,
+      transcriber: { transcribe: async () => { if (!working) throw new VoiceError("asr_failed", "asr 500"); return "recovered"; } },
+      cleaner: { clean: async (raw) => raw },
+    });
+    await expect(pipeline.finish([{ index: 0, data: sample() }], { spool })).rejects.toThrow();
+    const failed = spool.latestRetryable();
+    expect(failed).toBeTruthy();
+
+    working = true;
+    const result = await pipeline.retry(failed.id, { spool });
+    expect(result.text).toBe("recovered");
+    expect(result.retried).toBe(true);
+    expect(spool.list().find((entry) => entry.id === failed.id).status).toBe("ok");
+    rmSync(spoolDir, { recursive: true, force: true });
+  });
+
+  it("prunes oldest-first, dropping transcribed takes before failed ones", () => {
+    const spoolDir = dir();
+    const spool = new VoiceSpool({ dir: spoolDir, maxTakes: 2 });
+    const ids = [spool.save({ pcm: Buffer.alloc(4) }), spool.save({ pcm: Buffer.alloc(4) }), spool.save({ pcm: Buffer.alloc(4) })];
+    spool.mark(ids[0], { status: "ok" });
+    spool.mark(ids[1], { status: "failed" });
+    spool.mark(ids[2], { status: "ok" });
+    spool.prune();
+    const remaining = spool.list().map((entry) => entry.status).sort();
+    // The failed take survives its younger sibling when the budget is tight.
+    expect(remaining).toContain("failed");
+    expect(spool.list().length).toBeLessThanOrEqual(2);
+    rmSync(spoolDir, { recursive: true, force: true });
+  });
+});
+
+describe("voice: rate limiting follows the provider, not a timer", () => {
+  const headers = (entries) => ({ get: (name) => entries[name] ?? null });
+
+  it("caps concurrency", async () => {
+    const limiter = new RateLimiter({ concurrency: 2 });
+    let active = 0;
+    let peak = 0;
+    await Promise.all(
+      Array.from({ length: 8 }, async () => {
+        await limiter.acquire();
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        limiter.release();
+      }),
+    );
+    expect(peak).toBe(2);
+  });
+
+  it("waits out retry-after and halves concurrency", async () => {
+    const limiter = new RateLimiter({ concurrency: 4 });
+    const started = Date.now();
+    limiter.observe({ status: 429, headers: headers({ "retry-after": "0.08" }) });
+    expect(limiter.concurrency).toBe(2);
+    await limiter.acquire();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(70);
+    expect(limiter.stats.throttled).toBe(1);
+    limiter.release();
+  });
+
+  it("holds back before the ceiling rather than after a 429", async () => {
+    const limiter = new RateLimiter({ concurrency: 4 });
+    limiter.observe({ status: 200, headers: headers({ "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "0.08s" }) });
+    const started = Date.now();
+    await limiter.acquire();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(70);
+    expect(limiter.stats.throttled).toBe(0); // anticipated, never throttled
+    limiter.release();
+  });
+
+  it("recovers concurrency one success at a time", () => {
+    const limiter = new RateLimiter({ concurrency: 4 });
+    limiter.observe({ status: 429, headers: headers({}) });
+    expect(limiter.concurrency).toBe(2);
+    limiter.observe({ status: 200, headers: headers({}) });
+    expect(limiter.concurrency).toBe(3);
+    expect(limiter.maxConcurrency).toBe(4);
+  });
+
+  it("understands the durations and dates the provider sends", () => {
+    expect(parseDuration("1.2s")).toBe(1200);
+    expect(parseDuration("2m59.56s")).toBe(179560);
+    expect(parseDuration("500ms")).toBe(500);
+    expect(parseDuration("nonsense")).toBeUndefined();
+    expect(parseRetryAfter("30")).toBe(30_000);
+    expect(parseRetryAfter(new Date(Date.now() + 5000).toUTCString())).toBeGreaterThan(3000);
+  });
+});
+
+describe("voice: joining chunk transcripts", () => {
+  it("drops words echoed across a seam", () => {
+    expect(joinTranscripts(["the cat sat on the", "on the mat"])).toBe("the cat sat on the mat");
+    expect(joinTranscripts(["deploy the fix", "fix, then restart"])).toBe("deploy the fix then restart");
+    expect(joinTranscripts(["unrelated end", "another start"])).toBe("unrelated end another start");
+  });
+
+  it("keeps order and skips empty segments", () => {
+    expect(joinTranscripts(["one", "", "   ", "two"])).toBe("one two");
+    expect(joinTranscripts([])).toBe("");
+  });
+});
+
+describe("voice: transcription runs in parallel", () => {
+  it("requests segments concurrently under the limit, and joins them in order", async () => {
+    let active = 0;
+    let peak = 0;
+    const region = (byte, count) => Buffer.alloc(SAMPLE_RATE_HZ * 2 * count, byte);
+    const pipeline = new VoicePipeline({
+      limiter: new RateLimiter({ concurrency: 2 }),
+      transcriber: {
+        transcribe: async (wav) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          active -= 1;
+          return `s${marker(wav)}`;
+        },
+      },
+      cleaner: { clean: async (raw) => raw },
+    });
+    const pcm = Buffer.concat([region(1, 45), region(2, 45), region(3, 20)]);
+    const result = await pipeline.finish([{ index: 0, data: pcm.toString("base64") }]);
+    expect(result.segments).toBe(3);
+    expect(peak).toBe(2); // parallel, but never above the ceiling
+    expect(result.raw).toBe("s1 s2 s3");
+    expect(result.rateLimit.requests).toBe(3);
   });
 });

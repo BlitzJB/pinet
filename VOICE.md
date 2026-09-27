@@ -351,8 +351,13 @@ Each phase ships independently with tests and a doc update.
 
 - Audio is sealed end-to-end; the coordinator sees ciphertext and a byte count.
   The opacity invariant is preserved — no coordinator-side payload inspection.
-- **Never logged, never persisted by default.** In-memory buffers, dropped after
-  transcription. Opt-in `PINET_VOICE_KEEP_AUDIO` for debugging only.
+- **Never logged, and never sent anywhere but the configured provider.** Every take
+  *is* spooled to `~/.pinet/voice` **on the capturing host** before any provider is
+  called, so a failed transcription costs a retry rather than the recording — the
+  reason this exists is that a long dictation was lost to a length limit. The spool
+  is bounded (20 takes / 200MB by default) and prunes transcribed takes before
+  failed ones. `PINET_VOICE_SPOOL=off` disables it; `PINET_VOICE_SPOOL_DIR` and
+  `PINET_VOICE_SPOOL_MAX` adjust it.
 - Add `maxPayload` + per-type frame caps to the coordinator, a per-session audio
   rate limit, and a max-utterance length (a hostile controller must not be able
   to make the host do unbounded work).
