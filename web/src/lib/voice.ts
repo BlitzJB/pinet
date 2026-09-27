@@ -5,9 +5,10 @@
 // end to end — the coordinator relays it without ever being able to read it, and
 // the host holds it in memory only.
 //
-// Capture lives in an AudioWorklet (128-sample frames, batched to ~250ms so we
-// aren't posting ~370 messages a second), with a small linear resampler carrying
-// its position across chunks so no sample is dropped at a boundary.
+// Capture lives in an AudioWorklet: 128-sample render quanta are batched to
+// ~250ms for the audio, and level samples are posted ~20x/second for the
+// waveform. A linear resampler carries its position across chunks so no sample is
+// dropped at a boundary.
 
 /** Sample rate the STT provider expects. */
 const TARGET_RATE = 16_000;
@@ -18,6 +19,8 @@ const TARGET_RATE = 16_000;
  * against the app base so it works from any route (`/app/s/<id>`).
  */
 const WORKLET_URL = `${import.meta.env.BASE_URL}voice-worklet.js`;
+/** How many level samples the waveform holds. */
+export const WAVEFORM_PEAKS = 96;
 
 /** Integer/linear downmix to 16 kHz, keeping phase across chunk boundaries. */
 class Resampler {
@@ -53,30 +56,12 @@ function toBase64(bytes: Int16Array): string {
   return btoa(binary);
 }
 
-export interface VoiceRecorder {
-  /** Total audio captured so far, for the UI timer. */
-  readonly bytes: number;
-  stop(): Promise<void>;
-}
-
-/** A capture failure with enough context to tell the user what to do about it. */
+/** A capture failure, carried as the one line the user needs to read. */
 export class MicError extends Error {
-  readonly info: MicErrorInfo;
-
-  constructor(info: MicErrorInfo) {
-    super(info.message);
+  constructor(message: string) {
+    super(message);
     this.name = "MicError";
-    this.info = info;
   }
-}
-
-export interface MicErrorInfo {
-  /** What went wrong, in one line. */
-  message: string;
-  /** What the user can do about it. */
-  hint: string;
-  /** Raw detail (error name, permission state, secure context) for a tooltip. */
-  detail: string;
 }
 
 const isPermissionError = (error: unknown): boolean => {
@@ -84,154 +69,43 @@ const isPermissionError = (error: unknown): boolean => {
   return name === "NotAllowedError" || name === "SecurityError";
 };
 
-function refusedBeforePromptSteps(): string {
-  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
-  const steps = [];
-  if (/Macintosh/i.test(ua)) {
-    steps.push(
-      "macOS: System Settings → Privacy & Security → Microphone → turn on your browser (and the installed app, if it is listed separately), then quit the browser completely (\u2318Q, not just the window) and reopen it — a reload keeps the old state.",
-    );
-    steps.push("If that switch is greyed out or says your administrator controls it, a management profile is blocking it and no local setting can override it.");
-  } else if (/Android/i.test(ua)) {
-    steps.push("Android: Settings → Apps → Chrome → Permissions → Microphone → Allow, then reopen Chrome.");
-  } else if (/iPhone|iPad|iPod/i.test(ua)) {
-    steps.push("iOS: Settings → Safari → Microphone → Allow.");
-  } else {
-    steps.push("Operating system: grant your browser microphone access in the system privacy settings, then fully quit and reopen it.");
-  }
-  steps.push("Cross-check with a different browser: each app has its own microphone permission, so if another one prompts and works, the first browser is the one being refused.");
-  return steps.join(" ");
-}
-
-/**
- * How to unblock a microphone the browser has recorded as denied. `denied` (as
- * opposed to `prompt`) means a decision is stored against this origin, so
- * reloading cannot clear it — the site setting has to be changed. The steps are
- * platform-specific because the setting lives in a different place on each.
- */
-function unblockSteps(): string {
-  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
-  const steps = [
-    "Click the icon at the left of the address bar → Microphone → Allow, then reload.",
-    "If the site is listed under Blocked in chrome://settings/content/microphone, move it to Allowed.",
-  ];
-  if (/Android/i.test(ua)) {
-    steps.splice(0, 0, "Android: Settings → Apps → Chrome → Permissions → Microphone → Allow.");
-  }
-  if (/iPhone|iPad|iPod/i.test(ua)) {
-    steps.splice(0, 0, "iOS: Settings → Safari → Microphone → Allow (and the per-site menu via the \"aA\" button).");
-  }
-  if (/Macintosh|Windows|Linux/i.test(ua)) {
-    steps.push("On a managed/work machine, open chrome://policy — a microphone policy cannot be overridden from the UI.");
-  }
-  if (typeof window !== "undefined" && window.matchMedia?.("(display-mode: standalone)")?.matches) {
-    steps.push("You are in the installed app window: open the same URL in a normal browser tab to change the site permission, then come back.");
-  }
-  steps.push("To isolate a stored block from an OS or policy block: open the same URL in a private/incognito window. It starts from a fresh permission state.");
-  return steps.join(" ");
-}
-
-/** The browser's remembered decision, when it will tell us. */
-export async function micPermissionState(): Promise<PermissionState | "unknown"> {
-  try {
-    return (await navigator.permissions.query({ name: "microphone" as PermissionName })).state;
-  } catch {
-    return "unknown";
-  }
-}
-
-export async function micDevices(): Promise<string[]> {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    return devices.filter((device) => device.kind === "audioinput").map((device) => device.label || "(unlabelled until granted)");
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Everything needed to diagnose a capture failure from a bug report, without a
- * round of guesswork. `AudioWorklet` presence is reported because a missing or
- * blocked worklet fails *silently* by nature.
- */
-export async function captureDiagnostics(extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-  return {
-    workletUrl: WORKLET_URL,
-    audioWorkletSupported: typeof AudioContext === "undefined" ? false : "audioWorklet" in AudioContext.prototype,
-    mediaDevices: typeof navigator !== "undefined" && Boolean(navigator.mediaDevices),
-    permissionsApi: typeof navigator !== "undefined" && typeof navigator.permissions?.query === "function",
-    documentAllowsMicrophone: (() => {
-      // The applied document policy. A `Permissions-Policy: microphone=()` header
-      // makes this false — and that looks exactly like a user or OS block, so it
-      // is worth reporting separately.
-      if (typeof document === "undefined") return "unknown";
-      const policy = (document as unknown as { permissionsPolicy?: { allowsFeature?: (feature: string) => boolean } }).permissionsPolicy;
-      try {
-        return policy?.allowsFeature ? policy.allowsFeature("microphone") : "unknown";
-      } catch {
-        return "unknown";
-      }
-    })(),
-    permission: await micPermissionState(),
-    secureContext: typeof isSecureContext === "boolean" ? isSecureContext : "unknown",
-    inputs: await micDevices(),
-    userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
-    ...extra,
-  };
-}
-
-/**
- * A denied microphone has three quite different causes, and they need different
- * fixes, so this separates them instead of reporting "permission denied" for all
- * of them:
- *
- *   1. the browser remembers a block for this origin (permission === "denied")
- *   2. the site is allowed but the *OS* is blocking the browser/app
- *   3. the device is missing, busy, or cannot satisfy the constraints
- */
-export function micErrorInfo(error: unknown, permission: PermissionState | "unknown" = "unknown", elapsedMs?: number): MicErrorInfo {
+/** The user-facing reason, in one line. */
+export function micErrorMessage(error: unknown): string {
   const name = (error as { name?: string })?.name ?? "Error";
-  const secure = typeof isSecureContext === "boolean" ? String(isSecureContext) : "unknown";
-  const detail = `${name}: ${(error as { message?: string })?.message ?? ""} (permission=${permission}, secureContext=${secure})`;
+  if (isPermissionError(error)) return "Microphone blocked — allow it for this site";
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") return "No microphone found";
+  if (name === "NotReadableError" || name === "TrackStartError") return "Microphone in use by another app";
+  if (name === "OverconstrainedError") return "This microphone can't satisfy the requested settings";
+  return "Could not start recording";
+}
 
-  if (isPermissionError(error)) {
-    if (permission === "denied") {
-      return {
-        message: "The browser has blocked the microphone for this site",
-        hint: unblockSteps(),
-        detail,
-      };
-    }
-    // Site permission is still "ask"/unknown, yet the call was refused — and
-    // refused *instantly*, without a prompt ever appearing. That means the
-    // refusal happened before the browser could ask, i.e. at the app/OS level:
-    // Chrome has no microphone access of its own, so no site setting can help.
-    // (A site-level block would read "denied" above; a prompt would have taken
-    // seconds and returned an answer.)
-    const instant = typeof elapsedMs === "number" && elapsedMs < 250;
-    if (instant) {
-      return {
-        message: "Your system is blocking the browser's microphone",
-        hint: `${refusedBeforePromptSteps()}`,
-        detail: `${detail} rejectedAfterMs=${Math.round(elapsedMs ?? -1)} (no prompt was shown)`,
-      };
-    }
-    return {
-      message: "Something outside the page is blocking the microphone",
-      hint: "The site is allowed, so the operating system is refusing it: enable your browser (or this installed app) in System Settings → Privacy & Security → Microphone, then quit and reopen it. On iOS: Settings → Safari → Microphone.",
-      detail,
-    };
-  }
-  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-    return { message: "No microphone found", hint: "Connect an input device and reload.", detail };
-  }
-  if (name === "NotReadableError" || name === "TrackStartError") {
-    return { message: "The microphone is in use by another app", hint: "Close whatever else is recording and try again.", detail };
-  }
-  if (name === "OverconstrainedError") {
-    return { message: "This microphone does not support the requested settings", hint: "Try again — the recorder falls back to the loosest possible request.", detail };
-  }
-  return { message: "Could not start recording", hint: "Reload the page and try again.", detail };
+/**
+ * Rolling level history for the waveform: append and keep the newest `max`.
+ * Pure so the shape of the history is testable without an audio device.
+ */
+export function appendPeaks(existing: number[], incoming: number[], max = WAVEFORM_PEAKS): number[] {
+  const next = incoming.length >= max ? incoming.slice(incoming.length - max) : [...existing, ...incoming];
+  return next.length > max ? next.slice(next.length - max) : next;
+}
+
+export interface VoiceRecorder {
+  /** Total audio captured so far, for the UI timer. */
+  readonly bytes: number;
+  stop(): Promise<void>;
+}
+
+export interface RecorderOptions {
+  onChunk: (chunkBase64: string, index: number) => void;
+  /** Level samples, 0..1, roughly 20 per second. */
+  onPeaks?: (peaks: number[]) => void;
+  onError?: (message: string) => void;
+}
+
+export function voiceSupported(): boolean {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return false;
+  if (typeof AudioContext === "undefined") return false;
+  // The type always declares `audioWorklet`, but older Safari does not have it.
+  return "audioWorklet" in AudioContext.prototype;
 }
 
 /**
@@ -259,48 +133,29 @@ async function openInputStream(): Promise<MediaStream> {
   }
 }
 
-export interface RecorderOptions {
-  onChunk: (chunkBase64: string, index: number) => void;
-  onError?: (message: string) => void;
-  /** Peak level 0..1 per chunk, for a level meter. */
-  onLevel?: (level: number) => void;
-}
-
-export function voiceSupported(): boolean {
-  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return false;
-  if (typeof AudioContext === "undefined") return false;
-  // The type always declares `audioWorklet`, but older Safari does not have it.
-  return "audioWorklet" in AudioContext.prototype;
-}
-
-export async function startVoiceRecorder({ onChunk, onError, onLevel }: RecorderOptions): Promise<VoiceRecorder> {
-  if (!voiceSupported()) throw new Error("This browser cannot capture audio (AudioWorklet unavailable)");
+export async function startVoiceRecorder({ onChunk, onPeaks, onError }: RecorderOptions): Promise<VoiceRecorder> {
+  if (!voiceSupported()) throw new MicError("This browser cannot capture audio");
 
   let stream: MediaStream;
-  const startedAt = Date.now();
   try {
     stream = await openInputStream();
   } catch (error) {
-    throw new MicError(micErrorInfo(error, await micPermissionState(), Date.now() - startedAt));
+    throw new MicError(micErrorMessage(error));
   }
 
   const context = new AudioContext();
   const source = context.createMediaStreamSource(stream);
   try {
     await context.audioWorklet.addModule(WORKLET_URL);
-  } catch (error) {
+  } catch {
     for (const track of stream.getTracks()) track.stop();
     await context.close().catch(() => undefined);
-    throw new MicError({
-      message: "The audio capture module was blocked",
-      hint: `The browser refused to load ${WORKLET_URL}. If you are offline, reload; otherwise this is a content-security-policy or caching problem and the console will name it.`,
-      detail: `addModule(${WORKLET_URL}) failed: ${(error as { name?: string })?.name ?? "Error"}: ${(error as { message?: string })?.message ?? ""}`,
-    });
+    throw new MicError("The audio capture module was blocked");
   }
 
   const node = new AudioWorkletNode(context, "pinet-capture");
-  // Not connected to the destination: monitoring the mic back into the speakers
-  // would feed back.
+  // Not connected to the destination: monitoring the mic into the speakers would
+  // feed back.
   source.connect(node);
 
   const resampler = new Resampler();
@@ -308,14 +163,12 @@ export async function startVoiceRecorder({ onChunk, onError, onLevel }: Recorder
   let bytes = 0;
   let closed = false;
 
-  node.port.onmessage = (event: MessageEvent<Float32Array>) => {
+  node.port.onmessage = (event: MessageEvent<{ audio?: Float32Array; peaks?: number[] }>) => {
     if (closed) return;
-    const frame = event.data;
-    let peak = 0;
-    for (let i = 0; i < frame.length; i += 1) {
-      const magnitude = Math.abs(frame[i]);
-      if (magnitude > peak) peak = magnitude;
-    }
+    const message = event.data;
+    if (message.peaks?.length) onPeaks?.(message.peaks);
+    const frame = message.audio;
+    if (!frame) return;
     const pcm = resampler.process(frame, context.sampleRate);
     if (!pcm.length) return;
     bytes += pcm.byteLength;
@@ -324,9 +177,7 @@ export async function startVoiceRecorder({ onChunk, onError, onLevel }: Recorder
       index += 1;
     } catch (error) {
       onError?.(String((error as Error)?.message ?? error));
-      return;
     }
-    onLevel?.(Math.min(1, peak));
   };
 
   return {

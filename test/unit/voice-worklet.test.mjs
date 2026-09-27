@@ -46,19 +46,33 @@ describe("voice capture worklet", () => {
   });
 });
 
-describe("microphone failure classification", () => {
-  it("distinguishes site block, OS block, and no-device", async () => {
-    const { micErrorInfo } = await import("../../web/src/lib/voice.ts");
-    const notAllowed = Object.assign(new Error("Permission denied"), { name: "NotAllowedError" });
-    // A site block is a stored decision.
-    expect(micErrorInfo(notAllowed, "denied").message).toMatch(/blocked the microphone for this site/);
-    // Refused before any prompt could appear => the app/OS level, and the hint
-    // must say so rather than sending the user to site settings again.
-    const preePrompt = micErrorInfo(notAllowed, "prompt", 3);
-    expect(preePrompt.message).toMatch(/system is blocking the browser/);
-    expect(preePrompt.hint).toMatch(/quit the browser completely|Permissions|grant your browser/);
-    // A slow refusal means a prompt was answered.
-    expect(micErrorInfo(notAllowed, "prompt", 4000).message).toMatch(/outside the page/);
-    expect(micErrorInfo(Object.assign(new Error("x"), { name: "NotFoundError" })).message).toMatch(/No microphone found/);
+describe("worklet and recorder agree on the message shape", () => {
+  it("posts audio and peaks as named fields, and reads them back the same way", () => {
+    // They are separate messages: audio ~4x/second (transferred), peaks ~20x
+    // (plain). If one side changes shape, capture goes silent.
+    expect(worklet).toContain("this.port.postMessage({ peaks:");
+    expect(worklet).toContain("this.port.postMessage({ audio: merged }, [merged.buffer]);");
+    expect(voice).toContain("message.peaks");
+    expect(voice).toContain("message.audio");
+  });
+});
+
+describe("waveform history", () => {
+  it("keeps the newest peaks and caps the length", async () => {
+    const { appendPeaks } = await import("../../web/src/lib/voice.ts");
+    expect(appendPeaks([], [0.1, 0.2])).toEqual([0.1, 0.2]);
+    expect(appendPeaks([0.1], [0.2, 0.3], 4)).toEqual([0.1, 0.2, 0.3]);
+    expect(appendPeaks([1, 2, 3], [4, 5], 4)).toEqual([2, 3, 4, 5]);
+    // A single burst longer than the window keeps only its tail.
+    expect(appendPeaks([1], [2, 3, 4, 5, 6], 3)).toEqual([4, 5, 6]);
+  });
+
+  it("reports a short, human reason for a capture failure", async () => {
+    const { micErrorMessage } = await import("../../web/src/lib/voice.ts");
+    const named = (name) => Object.assign(new Error(name), { name });
+    expect(micErrorMessage(named("NotAllowedError"))).toMatch(/blocked/);
+    expect(micErrorMessage(named("NotFoundError"))).toMatch(/No microphone/);
+    expect(micErrorMessage(named("NotReadableError"))).toMatch(/in use/);
+    expect(micErrorMessage(new Error("boom"))).toMatch(/Could not start recording/);
   });
 });
