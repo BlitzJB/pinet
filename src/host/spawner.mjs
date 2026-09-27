@@ -175,7 +175,11 @@ export class SessionSpawner {
   }
 
   #tmuxCommand({ sessionId, name }) {
-    return [this.piBin, ...this.buildArgs({ sessionId, name })].map(shQuote).join(" ");
+    const command = [this.piBin, ...this.buildArgs({ sessionId, name })].map(shQuote).join(" ");
+    // A tmux pane does not inherit this process's environment, and a session
+    // created through a spawner has to know that it was: that is what makes it
+    // mount itself (see the direct-session rule in extension/index.ts).
+    return `env PINET_SPAWNED=1 ${command}`;
   }
 
   /** Drop detached sessions whose tmux session has gone away. */

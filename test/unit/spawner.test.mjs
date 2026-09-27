@@ -133,7 +133,9 @@ describe("SessionSpawner with tmux (sessions outlive the spawner)", () => {
     expect(calls[0].bin).toBe("tmux");
     expect(calls[0].args.slice(0, 5)).toEqual(["new-session", "-d", "-s", result.tmuxName, "-c"]);
     expect(calls[0].args[5]).toBe("/srv/app");
-    expect(calls[0].args[6]).toBe(`'pi' '--mode' 'rpc' '--session-id' '${result.sessionId}' '--name' 'fix login'`);
+    // A tmux pane does not inherit our environment, so the spawn marker travels in
+    // the command itself: that is what makes the session mount on startup.
+    expect(calls[0].args[6]).toBe(`env PINET_SPAWNED=1 'pi' '--mode' 'rpc' '--session-id' '${result.sessionId}' '--name' 'fix login'`);
     expect(live.has(result.tmuxName)).toBe(true);
     expect(spawner.capability()).toMatchObject({ persistent: true, active: 1 });
   });

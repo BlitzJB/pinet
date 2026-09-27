@@ -54,6 +54,9 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
     },
   });
   const pendingCommands = new Map(); // commandId -> { ws, at }
+  const spawners = new Map(); // ws -> spawner record
+  const spawnerIndex = new Map(); // spawnerId -> ws
+  const pendingSpawns = new Map(); // requestId -> { ws, at }
   const state = new WeakMap(); // ws -> auth state
 
   const pendingTimer = setInterval(() => {
@@ -103,6 +106,15 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
       const current = state.get(ws);
       if (current?.stage === "ready") {
         if (current.role === "host") registry.unregisterHost(ws);
+        if (current.role === "spawner") {
+          const spawner = spawners.get(ws);
+          if (spawner) {
+            spawners.delete(ws);
+            spawnerIndex.delete(spawner.spawnerId);
+            console.log(`[hub] spawner gone ${spawner.spawnerId}`);
+            broadcastSpawners(spawner.accountId);
+          }
+        }
         else registry.unregisterController(ws);
         console.log(`[hub] ${current.role} disconnected ${current.deviceId}`, registry.stats());
       }
@@ -127,14 +139,18 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
       return;
     }
     if (auth.role === "host") return handleHost(ws, msg.type, data, route, auth);
+    if (auth.role === "spawner") return handleSpawner(ws, msg.type, data, route, auth);
     if (auth.role === "controller") return handleController(ws, msg.type, data, route, auth);
   }
 
   function authenticate(ws, data, auth) {
     const { role, deviceId, signature, timestamp } = data;
-    if (role !== "host" && role !== "controller") throw new Error("invalid role");
+    if (role !== "host" && role !== "controller" && role !== "spawner") throw new Error("invalid role");
     const device = accounts.getDevice(deviceId);
-    if (!device || device.revoked || device.kind !== role) {
+    // A spawner is a host-side daemon using the host's own keys: no second
+    // enrollment, and it never registers a session so it cannot appear as a host.
+    const expectedKind = role === "spawner" ? "host" : role;
+    if (!device || device.revoked || device.kind !== expectedKind) {
       send(ws, "auth.error", { code: "unauthorized", message: "unknown or revoked device" });
       ws.close(4003, "unauthorized");
       return;
@@ -173,7 +189,62 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
   function broadcastCatalog(accountId) {
     const catalog = registry.catalog(accountId);
     for (const [ws, info] of registry.controllers) {
-      if (info.role === "controller" && info.accountId === accountId) send(ws, "ctl.catalog", { sessions: catalog });
+      if (info.role === "controller" && info.accountId === accountId) {
+        send(ws, "ctl.catalog", { sessions: catalog });
+        send(ws, "ctl.spawners", { spawners: spawnersFor(accountId) });
+      }
+    }
+  }
+
+  /**
+   * Spawners advertise a directory scope and create sessions inside it. They are
+   * not hosts: nothing here opens a session, so a spawner never shows up in the
+   * session list — it is a picker in the UI, nothing more.
+   */
+  function handleSpawner(ws, type, data, route, auth) {
+    const spawner = spawners.get(ws);
+    switch (type) {
+      case "spawner.register": {
+        if (typeof data.root !== "string" || typeof data.spawnerId !== "string") return;
+        const record = {
+          spawnerId: data.spawnerId,
+          accountId: auth.accountId,
+          deviceId: auth.deviceId,
+          label: String(data.label ?? "").slice(0, 120) || data.root,
+          root: data.root,
+          max: Number(data.max) || 8,
+          at: now(),
+        };
+        spawners.set(ws, record);
+        spawnerIndex.set(record.spawnerId, ws);
+        console.log(`[hub] spawner registered ${record.spawnerId} (${record.label}) root=${record.root}`);
+        broadcastSpawners(auth.accountId);
+        return;
+      }
+      case "spawn.result": {
+        const waiter = pendingSpawns.get(data.requestId);
+        if (!waiter) return;
+        pendingSpawns.delete(data.requestId);
+        if (waiter.ws.readyState === 1) send(waiter.ws, "spawn.result", data);
+        return;
+      }
+      case "spawn.dirs.result": {
+        const waiter = pendingSpawns.get(data.requestId);
+        if (!waiter) return;
+        pendingSpawns.delete(data.requestId);
+        if (waiter.ws.readyState === 1) send(waiter.ws, "spawn.dirs.result", data);
+        return;
+      }
+      case "spawner.unregister": {
+        if (spawner) {
+          spawners.delete(ws);
+          spawnerIndex.delete(spawner.spawnerId);
+          broadcastSpawners(spawner.accountId);
+        }
+        return;
+      }
+      default:
+        return;
     }
   }
 
@@ -305,6 +376,32 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
         if (host && attachment) send(host.ws, "host.detach", { sessionId: data.sessionId, attachmentId: attachment.attachmentId });
         return;
       }
+      case "ctl.spawners":
+        return send(ws, "ctl.spawners", { spawners: spawnersFor(auth.accountId) });
+      case "ctl.spawn":
+      case "ctl.spawner.dirs": {
+        const ws2 = spawnerIndex.get(data.spawnerId);
+        const spawner = ws2 ? spawners.get(ws2) : undefined;
+        // Same account only: a spawner creates sessions on someone's machine.
+        if (!ws2 || !spawner || spawner.accountId !== auth.accountId) {
+          send(ws, type === "ctl.spawn" ? "spawn.result" : "spawn.dirs.result", {
+            requestId: data.requestId,
+            ok: false,
+            error: "unknown_spawner",
+          });
+          return;
+        }
+        const requestId = randomUUID();
+        pendingSpawns.set(requestId, { ws, at: now() });
+        send(ws2, type === "ctl.spawn" ? "spawn.request" : "spawn.dirs.request", {
+          requestId,
+          spawnerId: data.spawnerId,
+          dir: data.dir,
+          path: data.path,
+          name: data.name,
+        });
+        return;
+      }
       case "ctl.command": {
         const info = registry.controllers.get(ws);
         const attachment = info?.attachments.get(data.sessionId);
@@ -367,9 +464,23 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
     }
   }
 
+  function spawnersFor(accountId) {
+    return [...spawners.values()]
+      .filter((spawner) => spawner.accountId === accountId)
+      .map(({ spawnerId, label, root, max, deviceId }) => ({ spawnerId, label, root, max, deviceId }));
+  }
+
+  function broadcastSpawners(accountId) {
+    const spawners = spawnersFor(accountId);
+    for (const [client, info] of registry.controllers) {
+      if (info.accountId === accountId && client.readyState === 1) send(client, "ctl.spawners", { spawners });
+    }
+  }
+
   return {
     wss,
     registry,
+    spawnersFor,
     close: () =>
       new Promise((resolve) => {
         for (const client of wss.clients) client.terminate();

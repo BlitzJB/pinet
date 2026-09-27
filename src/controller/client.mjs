@@ -31,6 +31,7 @@ export class PiNetController extends Emitter {
     this.snapshots = new Map();
     this.hostKeys = new Map();
     this.seqTracker = createSeqTracker();
+    this.spawnerList = [];
     this.resyncing = new Set();
     this.queue = Promise.resolve();
   }
@@ -170,6 +171,32 @@ export class PiNetController extends Emitter {
    * command. Chunk indices are per-utterance and double as the frame sequence,
    * so the host can order them and reject replays outside the epoch.
    */
+  /** Spawners advertised for this account: host-side daemons started with /rc. */
+  spawners() {
+    return this.spawnerList;
+  }
+
+  /** Ask the hub for the current spawner list (the reply lands on `spawners`). */
+  refreshSpawners() {
+    this.socket.send("ctl.spawners", {});
+  }
+
+  /** Ask a spawner to create a session, optionally in a subdirectory of its scope. */
+  async spawnOn(spawnerId, { dir, name } = {}) {
+    await this.socket.waitForReady(15_000);
+    const result = this.socket.waitFor("spawn.result", { timeoutMs: 30_000 });
+    this.socket.send("ctl.spawn", { spawnerId, dir, name });
+    return result;
+  }
+
+  /** Subdirectories of a spawner's scope, for the picker. */
+  async spawnerDirs(spawnerId, path) {
+    await this.socket.waitForReady(15_000);
+    const result = this.socket.waitFor("spawn.dirs.result", { timeoutMs: 15_000 });
+    this.socket.send("ctl.spawner.dirs", { spawnerId, path });
+    return result;
+  }
+
   async sendAudio(sessionId, chunk, index) {
     const entry = this.keys.get(sessionId);
     if (!entry) throw new Error(`no session key for ${sessionId}; attach first`);

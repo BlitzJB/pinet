@@ -12,8 +12,10 @@
  * Env: PINET_HUB, PINET_HTTP, PINET_DIR, PINET_ENROLL_CODE.
  */
 
+import { spawn as spawnProcess } from "node:child_process";
 import { hostname } from "node:os";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { HostBridge } from "../src/host/bridge.mjs";
 import { createSerialQueue } from "../src/host/command-queue.mjs";
@@ -595,6 +597,79 @@ export default function pinet(pi: Pi): void {
   }
 
   // -- /pinet command -------------------------------------------------------
+
+  // -- /rc: start a spawner daemon -------------------------------------------
+  //
+  // Spawners are started by hand on a host, never from the PiNet UI. The daemon is
+  // detached, so the pi session you run this in is only a launcher — and it stays
+  // unpublished, because a session started directly on the host does not mount
+  // itself. A spawner advertises a directory scope; sessions inside that scope are
+  // created from the UI.
+  const spawnerStatePath = `${dir}/spawners.json`;
+  const readSpawners = (): { pid: number; root: string; at: string }[] => {
+    try {
+      return JSON.parse(readFileSync(spawnerStatePath, "utf8")) as { pid: number; root: string; at: string }[];
+    } catch {
+      return [];
+    }
+  };
+  const writeSpawners = (entries: { pid: number; root: string; at: string }[]): void => {
+    try {
+      writeFileSync(spawnerStatePath, JSON.stringify(entries, null, 2));
+    } catch {
+      /* best effort */
+    }
+  };
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  pi.registerCommand("rc", {
+    description: "PiNet spawner: /rc [dir] | /rc stop | /rc status",
+    handler: async (args, ctx) => {
+      const [sub = "", rest = ""] = [args.trim().split(/\s+/)[0] ?? "", args.trim().split(/\s+/).slice(1).join(" ")];
+      if (sub === "status" || (!sub && readSpawners().length)) {
+        const running = readSpawners().filter((entry) => alive(entry.pid));
+        notify(
+          ctx,
+          running.length
+            ? `Spawners on this host:\n${running.map((entry) => `  pid ${entry.pid}  ${entry.root}`).join("\n")}`
+            : "No spawners running on this host. Start one with /rc [dir].",
+          running.length ? "info" : "warning",
+        );
+        if (!sub) return;
+      }
+      if (sub === "stop") {
+        const running = readSpawners().filter((entry) => alive(entry.pid));
+        for (const entry of running) {
+          try {
+            process.kill(entry.pid, "SIGTERM");
+          } catch {
+            /* already gone */
+          }
+        }
+        writeSpawners([]);
+        notify(ctx, running.length ? `Stopped ${running.length} spawner(s).` : "No spawners to stop.", "info");
+        return;
+      }
+      const target = rest || (sub && sub !== "start" ? sub : "") || ctx.cwd;
+      try {
+        const daemon = fileURLToPath(new URL("../src/spawner/daemon.mjs", import.meta.url));
+        const child = spawnProcess(process.execPath, [daemon, "--dir", target], { detached: true, stdio: "ignore" });
+        child.unref();
+        const entries = [...readSpawners().filter((entry) => alive(entry.pid)), { pid: child.pid ?? 0, root: target, at: new Date().toISOString() }];
+        writeSpawners(entries);
+        notify(ctx, `Spawner started in ${target}\nSessions created inside it appear in PiNet and mount themselves.\n/rc status shows it, /rc stop stops it.`, "info");
+      } catch (error) {
+        notify(ctx, `Could not start a spawner: ${String((error as Error)?.message ?? error)}`, "error");
+      }
+    },
+  });
 
   pi.registerCommand("pinet", {
     description: "PiNet remote control: /pinet setup | status | reconnect | logout",
