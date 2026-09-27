@@ -62,6 +62,12 @@ export class PiNetController extends Emitter {
     socket.on("reconnecting", (info) => this.emit("reconnecting", info));
     socket.on("reconnected", () => void this.#resync());
 
+    // Spawners are pulled on demand (`refreshSpawners`) and pushed whenever one
+    // registers or goes away.
+    socket.on("ctl.spawners", (data) => {
+      this.spawnerList = data?.spawners ?? [];
+      this.emit("spawners", { spawners: this.spawnerList });
+    });
     socket.on("e2e.key", (data) => this.#enqueue(() => this.#onKey(data)));
     socket.on("ctl.attached", (data) => this.#rememberHost(data));
     for (const type of ["session.snapshot", "session.rebase", "session.entries", "session.page", "session.status", "session.voice", "session.meta"]) {
@@ -176,9 +182,18 @@ export class PiNetController extends Emitter {
     return this.spawnerList;
   }
 
-  /** Ask the hub for the current spawner list (the reply lands on `spawners`). */
-  refreshSpawners() {
-    this.socket.send("ctl.spawners", {});
+  /**
+   * Ask the hub for the current spawner list. Waits for the socket like `list()`
+   * does: called from a React effect it can easily run before the handshake, and a
+   * send into a closing socket is silently lost.
+   */
+  async refreshSpawners() {
+    try {
+      await this.socket.waitForReady(15_000);
+      this.socket.send("ctl.spawners", {});
+    } catch {
+      /* the hub will push the list when it reconnects */
+    }
   }
 
   /** Ask a spawner to create a session, optionally in a subdirectory of its scope. */

@@ -86,6 +86,7 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [localNames, setLocalNames] = useState<Record<string, string>>({});
   const [spawnTarget, setSpawnTarget] = useState<{ hostId: string; hostLabel: string; sessionId: string; capability: SpawnCapabilityInfo } | null>(null);
+  const [spawners, setSpawners] = useState<{ spawnerId: string; label: string; root: string; max?: number }[]>([]);
   const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
 
   // A rename is shown immediately; once the coordinator's catalog agrees (host
@@ -128,11 +129,13 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
     });
   }
 
-  /** Create a session on a host's spawner, rooted wherever the dialog chose. */
-  async function createSession(options: { name?: string; dir?: string }): Promise<void> {
-    const target = spawnTarget;
-    if (!target) return;
-    const result = await connection.spawn(target.sessionId, { ...options, mode: "session" });
+  // The hub pushes the spawner list and answers a pull, so the picker is current.
+  useEffect(() => connection.onSpawners(setSpawners), [connection]);
+
+  /** Create a session through the chosen spawner, in the chosen subdirectory. */
+  async function createSession(options: { spawnerId: string; name?: string; dir?: string }): Promise<void> {
+    const result = await connection.spawnOnSpawner(options.spawnerId, { name: options.name, dir: options.dir });
+    if (result?.ok === false) throw new Error(result.error ?? "could not create the session");
     setSpawnTarget(null);
     onNavigate?.();
     void queryClient.invalidateQueries({ queryKey: ["catalog"] });
@@ -339,9 +342,9 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
       <SpawnDialog
         open={Boolean(spawnTarget)}
         hostLabel={spawnTarget?.hostLabel ?? ""}
-        target={spawnTarget}
+        spawners={spawners}
         onClose={() => setSpawnTarget(null)}
-        load={(path) => connection.spawnDirs(spawnTarget!.sessionId, path)}
+        load={(spawnerId, path) => connection.spawnerDirs(spawnerId, path)}
         onCreate={createSession}
       />
     </aside>

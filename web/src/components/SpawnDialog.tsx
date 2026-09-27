@@ -27,19 +27,21 @@ export interface SpawnTarget {
 export function SpawnDialog({
   open,
   hostLabel,
-  target,
+  spawners,
   onClose,
   load,
   onCreate,
 }: {
   open: boolean;
   hostLabel: string;
-  target: SpawnTarget | null;
+  /** Spawners on this account: started by hand on a host with /rc. */
+  spawners: { spawnerId: string; label: string; root: string; max?: number }[];
   onClose: () => void;
-  load: (path?: string) => Promise<{ path?: string; root?: string; entries?: string[]; error?: string }>;
-  onCreate: (options: { name?: string; dir?: string }) => Promise<void>;
+  load: (spawnerId: string, path?: string) => Promise<{ path?: string; entries?: string[]; ok?: boolean; error?: string }>;
+  onCreate: (options: { spawnerId: string; name?: string; dir?: string }) => Promise<void>;
 }) {
   const [name, setName] = useState("");
+  const [spawnerId, setSpawnerId] = useState<string>("");
   const [path, setPath] = useState(".");
   const [entries, setEntries] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -51,13 +53,14 @@ export function SpawnDialog({
     setName("");
     setPath(".");
     setError(null);
-  }, [open, target?.sessionId]);
+    setSpawnerId((current) => (spawners.some((entry) => entry.spawnerId === current) ? current : (spawners[0]?.spawnerId ?? "")));
+  }, [open, spawners]);
 
   useEffect(() => {
-    if (!open || !target) return;
+    if (!open || !spawnerId) return;
     let cancelled = false;
     setLoading(true);
-    load(path)
+    load(spawnerId, path)
       .then((result) => {
         if (cancelled) return;
         if (result.error) {
@@ -72,11 +75,12 @@ export function SpawnDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, target, path, load]);
+  }, [open, spawnerId, path, load]);
 
-  if (!open || !target) return null;
+  if (!open) return null;
 
-  const root = target.capability.cwd ?? "";
+  const selected = spawners.find((entry) => entry.spawnerId === spawnerId);
+  const root = selected?.root ?? "";
   const absolute = path === "." ? root : `${root.replace(/\/$/, "")}/${path}`;
   const up = () => setPath((current) => (current === "." ? "." : (current.split("/").slice(0, -1).join("/") || ".")));
 
@@ -87,8 +91,36 @@ export function SpawnDialog({
         <h2 className="text-[14px] font-medium">New session</h2>
         <p className="mt-0.5 text-[12px] text-muted-foreground">
           on <span className="text-foreground/80">{hostLabel}</span>
-          {target.capability.active !== undefined && target.capability.max ? ` · ${target.capability.active}/${target.capability.max} running` : ""}
         </p>
+
+        {/* Spawners are started by hand on the host (/rc); this only picks one. */}
+        {spawners.length > 1 ? (
+          <select
+            value={spawnerId}
+            onChange={(event) => {
+              setSpawnerId(event.target.value);
+              setPath(".");
+            }}
+            className="mt-3 w-full rounded-lg border border-border/60 bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-foreground/30"
+          >
+            {spawners.map((entry) => (
+              <option key={entry.spawnerId} value={entry.spawnerId}>
+                {entry.label} — {entry.root}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <p className="mt-3 truncate text-[12px] text-muted-foreground" title={root}>
+            Spawner: <span className="text-foreground/80">{selected?.label ?? "none"}</span>
+          </p>
+        )}
+
+        {spawners.length === 0 && (
+          <p className="mt-2 rounded-lg bg-foreground/[0.04] px-2.5 py-2 text-[11.5px] leading-snug text-muted-foreground">
+            No spawner is running on this host. Start one in a directory there with <code className="text-foreground/80">/rc</code>, then come
+            back — sessions are created inside its scope.
+          </p>
+        )}
 
         <input
           autoFocus
@@ -142,12 +174,12 @@ export function SpawnDialog({
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || !spawnerId}
             onClick={async () => {
               setBusy(true);
               setError(null);
               try {
-                await onCreate({ name: name.trim() || undefined, dir: path === "." ? undefined : path });
+                await onCreate({ spawnerId, name: name.trim() || undefined, dir: path === "." ? undefined : path });
               } catch (cause) {
                 setError(String((cause as Error)?.message ?? cause));
                 setBusy(false);

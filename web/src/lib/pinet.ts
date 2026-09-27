@@ -44,6 +44,13 @@ export interface SessionMeta {
 }
 
 /** One dictation result: the cleaned text, plus what came back from the host. */
+export interface SpawnerInfo {
+  spawnerId: string;
+  label: string;
+  root: string;
+  max?: number;
+}
+
 export interface VoiceResult {
   text: string;
   raw?: string;
@@ -388,6 +395,36 @@ export class PiNetConnection {
     return this.controller!.command(sessionId, "set_thinking", { level });
   }
   /** Ask a host to spawn a new session (session/worktree spawn mode). */
+  /** Spawners on this account: host-side daemons started by hand with /rc. */
+  spawners(): SpawnerInfo[] {
+    return (this.controller?.spawners() as SpawnerInfo[]) ?? [];
+  }
+
+  /**
+   * Subscribe to the spawner list. The hub pushes it when one registers or goes
+   * away, and answers a pull, so a freshly opened sidebar is never stale.
+   */
+  onSpawners(fn: (spawners: SpawnerInfo[]) => void): () => void {
+    const controller = this.controller;
+    if (!controller) return () => {};
+    const handler = (data: { spawners?: SpawnerInfo[] }) => fn(data?.spawners ?? []);
+    controller.on("spawners", handler);
+    controller.refreshSpawners();
+    return () => controller.off("spawners", handler);
+  }
+
+  /** Create a session through a spawner, in a subdirectory of its scope. */
+  async spawnOnSpawner(spawnerId: string, options: { name?: string; dir?: string }): Promise<{ ok?: boolean; sessionId?: string; error?: string }> {
+    if (!this.controller) throw new Error("not connected");
+    return (await this.controller.spawnOn(spawnerId, options)) as { ok?: boolean; sessionId?: string; error?: string };
+  }
+
+  /** Subdirectories of a spawner's scope (scope enforcement is the host's). */
+  async spawnerDirs(spawnerId: string, path?: string): Promise<{ path?: string; root?: string; entries?: string[]; ok?: boolean; error?: string }> {
+    if (!this.controller) throw new Error("not connected");
+    return (await this.controller.spawnerDirs(spawnerId, path)) as { path?: string; entries?: string[]; ok?: boolean; error?: string };
+  }
+
   /** Subdirectories of a spawner, for the directory picker. Scope is the host's. */
   async spawnDirs(sessionId: string, path?: string): Promise<{ path?: string; root?: string; entries?: string[]; error?: string }> {
     if (!this.controller) throw new Error("not connected");
