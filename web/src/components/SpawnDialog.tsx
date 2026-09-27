@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeftIcon, FolderIcon, Loader2Icon } from "lucide-react";
 import { cn } from "../lib/utils";
@@ -48,19 +48,32 @@ export function SpawnDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * Callers pass fresh callbacks and a freshly filtered array on every render, so
+   * effects must not depend on those identities: doing so reset `path` to "." on
+   * every re-render, which is how picking /root then home-jev sent "home-jev"
+   * (relative to "/") and came back dir_out_of_scope.
+   */
+  const loadRef = useRef(load);
+  loadRef.current = load;
+
   useEffect(() => {
     if (!open) return;
     setName("");
     setPath(".");
     setError(null);
+  }, [open]);
+
+  // Only ever fixes an invalid selection; it must not touch the navigation state.
+  useEffect(() => {
     setSpawnerId((current) => (spawners.some((entry) => entry.spawnerId === current) ? current : (spawners[0]?.spawnerId ?? "")));
-  }, [open, spawners]);
+  }, [spawners]);
 
   useEffect(() => {
     if (!open || !spawnerId) return;
     let cancelled = false;
     setLoading(true);
-    load(spawnerId, path)
+    loadRef.current(spawnerId, path)
       .then((result) => {
         if (cancelled) return;
         if (result.error) {
@@ -75,13 +88,14 @@ export function SpawnDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, spawnerId, path, load]);
+  }, [open, spawnerId, path]);
 
   if (!open) return null;
 
   const selected = spawners.find((entry) => entry.spawnerId === spawnerId);
   const root = selected?.root ?? "";
-  const absolute = path === "." ? root : `${root.replace(/\/$/, "")}/${path}`;
+  // A spawner rooted at "/" must not render "//root".
+  const absolute = path === "." ? root : `${root === "/" ? "" : root.replace(/\/$/, "")}/${path}`;
   const up = () => setPath((current) => (current === "." ? "." : (current.split("/").slice(0, -1).join("/") || ".")));
 
   return createPortal(

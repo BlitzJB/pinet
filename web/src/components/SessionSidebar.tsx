@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRightIcon, MessageSquareIcon, MoreVerticalIcon, PanelRightIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon, SettingsIcon } from "lucide-react";
@@ -129,6 +129,13 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
       return next;
     });
   }
+
+  // Stable identity so the dialog is not handed a new array on every render.
+  const spawnerList = useStore(connection.spawnerStore).list;
+  const hostSpawners = useMemo(
+    () => spawnerList.filter((entry) => !spawnTarget?.hostId || entry.deviceId === spawnTarget.hostId),
+    [spawnerList, spawnTarget?.hostId],
+  );
 
   /** Create a session through the chosen spawner, in the chosen subdirectory. */
   async function createSession(options: { spawnerId: string; name?: string; dir?: string }): Promise<void> {
@@ -340,7 +347,7 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
       <SpawnDialog
         open={Boolean(spawnTarget)}
         hostLabel={spawnTarget?.hostLabel ?? ""}
-        spawners={useStore(connection.spawnerStore).list.filter((entry) => !spawnTarget?.hostId || entry.deviceId === spawnTarget.hostId)}
+        spawners={hostSpawners}
         onClose={() => setSpawnTarget(null)}
         load={(spawnerId, path) => connection.spawnerDirs(spawnerId, path)}
         onCreate={createSession}
