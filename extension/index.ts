@@ -558,11 +558,15 @@ export default function pinet(pi: Pi): void {
       trace("subagent child: pinet host disabled");
       return;
     }
-    // A spawned session is mounted on request, not on startup: run `/portal mount`
-    // inside it to publish it. Without this every session a spawner creates would
-    // appear in the sidebar whether or not it was wanted.
-    if (process.env.PINET_SPAWNED === "1" && process.env.PINET_AUTO_MOUNT !== "1") {
-      trace("spawned session: not mounted (run /portal mount)");
+    // Which sessions publish themselves:
+    //   * created through a spawner → yes. The spawner is triggered from the PiNet
+    //     UI, so the user may have no shell on this host to mount it by hand.
+    //   * a pi session started directly on the host → no. Publishing it is a
+    //     decision, not a default; `/portal mount` inside it publishes it.
+    // PINET_AUTO_MOUNT=1 restores the old behaviour for a host that is only
+    // reachable through PiNet (the VM runs this, so its session keeps working).
+    if (process.env.PINET_SPAWNED !== "1" && process.env.PINET_AUTO_MOUNT !== "1") {
+      trace("direct session: not mounted (run /portal mount)");
       return;
     }
     trace("autoStart");

@@ -356,3 +356,55 @@ describe("host extension delta streaming", () => {
     controller.close();
   });
 });
+
+/** Start a host (optionally as a spawned session) and return a controller. */
+async function startMountableHost(name) {
+  const enrolled = enrollDevice(coord.accounts, account.id, "host", name);
+  writeFileSync(
+    join(dir, "host.json"),
+    JSON.stringify({ hostId: enrolled.device.id, identity: enrolled.identity, encryption: enrolled.encryption }),
+  );
+  process.env.PINET_DIR = dir;
+  process.env.PINET_HUB = coord.url;
+  process.env.PINET_HTTP = coord.httpUrl;
+  const pi = fakePi();
+  hostExtension(pi);
+  await pi.handlers.session_start[0]({}, makeCtx({ entries: [] }));
+  const ctl = enrollDevice(coord.accounts, account.id, "controller", `${name}-ctl`);
+  const controller = new PiNetController({ url: coord.url, deviceId: ctl.device.id, identity: ctl.identity, encryption: ctl.encryption });
+  await controller.connect();
+  for (let i = 0; i < 30; i += 1) {
+    if ((await controller.list()).some((session) => session.sessionId === SESSION)) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return controller;
+}
+
+describe("host extension mounting", () => {
+  it("does not publish a session started directly on the host", async () => {
+    // Publishing is a decision, not a default: only a spawner-created session (or
+    // PINET_AUTO_MOUNT=1) mounts itself, and the test env opts into auto-mount.
+    delete process.env.PINET_AUTO_MOUNT;
+    delete process.env.PINET_SPAWNED;
+    try {
+      const controller = await startMountableHost("direct-mount");
+      expect(await controller.list()).toEqual([]);
+      controller.close();
+    } finally {
+      process.env.PINET_AUTO_MOUNT = "1";
+    }
+  });
+
+  it("publishes a session created through a spawner", async () => {
+    // The spawner is triggered from the PiNet UI, so the user may have no shell on
+    // the host to mount it by hand.
+    process.env.PINET_SPAWNED = "1";
+    try {
+      const controller = await startMountableHost("spawned-mount");
+      expect((await controller.list()).map((session) => session.sessionId)).toContain(SESSION);
+      controller.close();
+    } finally {
+      delete process.env.PINET_SPAWNED;
+    }
+  });
+});
