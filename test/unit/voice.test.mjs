@@ -12,6 +12,7 @@ import {
   VoiceSpool,
   assembleChunks,
   buildCleanupPrompt,
+  extractTranscript,
   findCutPoint,
   joinTranscripts,
   parseDuration,
@@ -443,5 +444,38 @@ describe("voice on the coordinator", () => {
     const { createVoiceService } = await import("../../src/coordinator/voice.mjs");
     const service = createVoiceService({ env: { GROQ_API_KEY: "k" }, fetchImpl: fakeFetch("x") });
     expect((await service.transcribe({ chunks: [] })).flags).toEqual(["no_speech"]);
+  });
+});
+
+describe("voice: a model that talks instead of cleaning", () => {
+  it("recovers the transcript when it was wrapped in an explanation", () => {
+    // The reported failure, verbatim in shape: the model lectured about the
+    // language and appended the text it had been asked to clean.
+    const raw = "Aðaðaði nýjaði næstur að náðan af hanaði landaði peníburna þetta fela.";
+    const clean = `The input text is not in English and does not contain recognizable English speech. According to Rule 8, if the transcript is empty or contains no meaningful speech (in the context of the specified language, English), it should be returned unchanged.\n\n${raw}`;
+    expect(guardResult(raw, clean).reasons).toContain("meta");
+    expect(extractTranscript(raw, clean)).toBe(raw);
+  });
+
+  it("does not claim a recovery when nothing was added", () => {
+    const raw = "deploy the fix";
+    expect(extractTranscript(raw, raw)).toBeUndefined();
+    expect(extractTranscript(raw, "Something else entirely")).toBeUndefined();
+    expect(extractTranscript("tiny", "tiny")).toBeUndefined();
+  });
+
+  it("flags reasoning about the task, not the word 'transcript' alone", () => {
+    expect(guardResult("hello there", "The input is unclear, returning it unchanged").reasons).toContain("meta");
+    expect(guardResult("hello there", "According to Rule 8 this needs no change").reasons).toContain("meta");
+    // A cleaned transcript that happens to mention transcripts is fine.
+    expect(guardResult("send me the transcript", "Send me the transcript.").reasons).toEqual([]);
+  });
+
+  it("keeps the cleanup prompt language-agnostic", () => {
+    const prompt = buildCleanupPrompt();
+    expect(prompt).not.toContain("spoken language (en)");
+    expect(prompt).toMatch(/Work in the language that was spoken/);
+    expect(prompt).toMatch(/never translate it/);
+    expect(prompt).toMatch(/Output ONLY the resulting text/);
   });
 });

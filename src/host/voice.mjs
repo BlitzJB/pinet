@@ -72,6 +72,26 @@ export const DEFAULT_POLICIES = {
 };
 
 const META_PREFIX = /^\s*(here('| i)?s|sure[,!.]|certainly|i've cleaned|the cleaned|cleaned version|corrected version)/i;
+/**
+ * Reasoning about the task rather than doing it.
+ *
+ * Deliberately shaped as predicates, not keywords: "the transcript" or "the
+ * input" appear in ordinary dictation ("send me the transcript"), so matching
+ * those alone rejected perfectly good text.
+ */
+const META_TALK = new RegExp(
+  [
+    "\\bnot\\s+(?:in\\s+)?english\\b",
+    "\\bno\\s+(?:recognizable|meaningful)\\s+(?:speech|content|english)\\b",
+    "\\baccording\\s+to\\s+rule\\s+\\d+\\b",
+    "\\breturn(?:ed|ing)?\\s+(?:it\\s+|the\\s+text\\s+|the\\s+input\\s+)?unchanged\\b",
+    "\\bthe\\s+input\\s+(?:text\\s+)?(?:is|appears|seems)\\b",
+    "\\b(?:appears|seems)\\s+to\\s+be\\s+(?:a\\s+|an\\s+)?(?:string|series|sequence)\\b",
+    "\\bi\\s+(?:cannot|can't|won't|will\\s+not)\\s+(?:clean|process|transcribe|assist)\\b",
+    "\\bas\\s+an\\s+ai\\b",
+  ].join("|"),
+  "i",
+);
 
 /** Wrap 16-bit mono PCM in a WAV container (no ffmpeg on the host). */
 export function pcm16ToWav(pcm, sampleRate = SAMPLE_RATE) {
@@ -365,19 +385,24 @@ export function buildCleanupPrompt({ policies = DEFAULT_POLICIES, context } = {}
   const sections = [];
 
   sections.push(
-    `You are a dictation cleanup function for spoken language (${p.language}).`,
-    "Input: a raw speech transcript. Output: the same text with mechanics fixed.",
+    "You are a dictation cleanup function. Input: a raw speech transcript, in",
+    "whatever language the speaker used. Output: the same text with mechanics fixed.",
     "",
     "Rules:",
-    "1. Remove filler words (um, uh, er, ah, hmm, mm) and false starts/stutters.",
+    "0. Work in the language that was spoken. If the text is not English, clean it in",
+    "   its own language and never translate it. Never remark on the language.",
+    "1. Remove filler words (in English: um, uh, er, ah, hmm, mm — or the equivalent",
+    "   in the language being spoken) and false starts/stutters.",
     "2. Remove bracketed non-speech markers such as [SOUND], [MUSIC], [BLANK_AUDIO], (music), ♪.",
     "3. Fix punctuation, spacing and capitalisation.",
     "4. Apply the speaker's self-corrections: if they say \"no wait\" or \"I mean\" and restate something, keep only the final version.",
     "5. Preserve every number, identifier, file path, technical term and proper noun.",
     "6. Preserve line breaks exactly as given. Never join lines into one paragraph.",
     "7. Do not add information. Do not answer questions contained in the text. Do not explain anything, do not summarise, do not translate.",
-    "8. If the transcript is empty or contains no meaningful speech, return it completely unchanged.",
-    "9. Return only the cleaned text: no quotes, no framing, no commentary.",
+    "8. If there is nothing to fix — including when the text is too short, unclear or",
+    "   in a language you do not recognise — return the input text verbatim.",
+    "9. Output ONLY the resulting text. Never explain what you did, never quote these",
+    "   rules, never mention the language or the input, never add notes or framing.",
   );
 
   if (p.keepRegister) {
@@ -424,6 +449,31 @@ export function buildCleanupPrompt({ policies = DEFAULT_POLICIES, context } = {}
 // Dots count only *inside* a token, so "node.js" and "3.14" survive while a
 // sentence-final period does not become part of the word (it did, and it made a
 // correct cleanup look like content loss).
+/** Whitespace/case-insensitive form, for spotting a transcript inside prose. */
+const flatten = (text) => String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * The transcript, if the model wrapped it in prose.
+ *
+ * Asked to clean something it finds odd (a language it does not expect, say) a
+ * model sometimes replies with an explanation *plus* the untouched transcript.
+ * Rather than throw that away, recover the text it preserved.
+ */
+export function extractTranscript(raw, clean) {
+  const needle = flatten(raw);
+  if (needle.length < 8) return undefined;
+  const haystack = flatten(clean);
+  // Nothing was wrapped: the model just did its job.
+  if (haystack === needle) return undefined;
+  const at = haystack.indexOf(needle);
+  if (at < 0) return undefined;
+  // Map the flattened match back to the original by walking words.
+  const before = haystack.slice(0, at).split(" ").filter(Boolean).length;
+  const count = needle.split(" ").filter(Boolean).length;
+  const parts = String(clean).trim().split(/\s+/);
+  return parts.slice(before, before + count).join(" ").trim() || undefined;
+}
+
 const words = (text) => text.toLowerCase().match(/[a-z0-9_/-]+(?:\.[a-z0-9_/-]+)*/g) ?? [];
 
 /**
@@ -441,7 +491,7 @@ export function guardResult(raw, clean, { minCoverage = 0.3, maxNovelty = 0.5 } 
   const c = String(clean ?? "").trim();
   const reasons = [];
   if (!c) reasons.push("empty");
-  const meta = META_PREFIX.test(c);
+  const meta = META_PREFIX.test(c) || META_TALK.test(c);
   if (meta) reasons.push("meta");
   const r = words(String(raw ?? ""));
   const t = words(c);
@@ -709,8 +759,11 @@ export class VoicePipeline {
     }
     const guard = guardResult(raw, cleaned);
     const blocked = guard.reasons.includes("empty") || guard.reasons.includes("meta");
+    // If it explained itself but also returned the transcript, keep the transcript.
+    const recovered = blocked && !guard.reasons.includes("empty") ? extractTranscript(raw, cleaned) : undefined;
     return {
-      text: blocked ? raw : cleaned,
+      text: recovered ?? (blocked ? raw : cleaned),
+      recovered: Boolean(recovered),
       raw,
       flags: guard.ok ? [] : guard.reasons,
       guard: { coverage: guard.coverage, novelty: guard.novelty },
