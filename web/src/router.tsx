@@ -3,6 +3,7 @@ import { Root } from "./routes/root";
 import { WelcomePage } from "./routes/welcome";
 import { SessionPage } from "./routes/session";
 import { SettingsPage } from "./routes/settings";
+import { StatusPage } from "./routes/status";
 
 const rootRoute = createRootRoute({ component: Root });
 
@@ -16,8 +17,10 @@ const sessionRoute = createRoute({
     typeof search.side === "string" && search.side ? { side: search.side } : {},
 });
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
+// A board for a screen that is left on, so it is a route rather than a mode.
+const statusRoute = createRoute({ getParentRoute: () => rootRoute, path: "/status", component: StatusPage });
 
-const routeTree = rootRoute.addChildren([indexRoute, sessionRoute, settingsRoute]);
+const routeTree = rootRoute.addChildren([indexRoute, sessionRoute, settingsRoute, statusRoute]);
 
 export const router = createRouter({ routeTree, basepath: "/app" });
 

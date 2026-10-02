@@ -310,6 +310,15 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       <div className="border-t border-sidebar-border p-2.5">
         <Link
+          to="/status"
+          onClick={onNavigate}
+          className="mb-1 flex items-center gap-2.5 rounded-xl p-1.5 text-muted-foreground transition-colors hover:bg-foreground/[0.04] hover:text-foreground"
+          title="Status board — a screen you can leave on"
+        >
+          <ServerIcon className="size-4 shrink-0" />
+          <span className="text-[12.5px] font-medium">Status board</span>
+        </Link>
+        <Link
           to="/settings"
           onClick={onNavigate}
           className="group/account flex items-center gap-2.5 rounded-xl p-1.5 transition-colors hover:bg-foreground/[0.04]"
