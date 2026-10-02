@@ -9,6 +9,7 @@ import {
   MAX_AUDIO_BYTES,
   VoiceError,
   VoicePipeline,
+  VoiceError,
   VoiceSpool,
   assembleChunks,
   buildCleanupPrompt,
@@ -477,5 +478,46 @@ describe("voice: a model that talks instead of cleaning", () => {
     expect(prompt).toMatch(/Work in the language that was spoken/);
     expect(prompt).toMatch(/never translate it/);
     expect(prompt).toMatch(/Output ONLY the resulting text/);
+  });
+});
+
+describe("voice: hardening from adversarial review", () => {
+  it("refuses a spool id that would escape the spool directory", async () => {
+    // `retry` takes an id from a controller command, and `mark` writes.
+    const { VoiceSpool } = await import("../../src/host/voice.mjs");
+    expect(VoiceSpool.isSafeId("2026-09-28T00-00-00-000Z-0000-abcd")).toBe(true);
+    expect(VoiceSpool.isSafeId("../../.pi/agent/auth")).toBe(false);
+    expect(VoiceSpool.isSafeId("..%2f..%2fx")).toBe(false);
+    expect(VoiceSpool.isSafeId("/etc/passwd")).toBe(false);
+    expect(VoiceSpool.isSafeId("a/b")).toBe(false);
+    expect(VoiceSpool.isSafeId("")).toBe(false);
+    expect(VoiceSpool.isSafeId(undefined)).toBe(false);
+
+    const dir = mkdtempSync(join(tmpdir(), "pinet-spool-id-"));
+    const spool = new VoiceSpool({ dir });
+    expect(() => spool.load("../../etc/passwd")).toThrow(VoiceError);
+    spool.mark("../../etc/passwd", { status: "ok" }); // must not throw, must not write
+    expect(() => spool.load("nope")).toThrow();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("clamps an absurd retry-after instead of stalling forever", async () => {
+    const { RateLimiter } = await import("../../src/host/voice.mjs");
+    const limiter = new RateLimiter({ concurrency: 4 });
+    limiter.observe({ status: 429, headers: { get: () => "999999" } });
+    // Gate is capped at a minute, not 11 days.
+    expect(limiter.gateUntil - limiter.now()).toBeLessThanOrEqual(60_000);
+  });
+
+  it("refuses a take that is not 16kHz rather than mis-wrapping it", async () => {
+    const { createVoiceService } = await import("../../src/coordinator/voice.mjs");
+    const service = createVoiceService({ env: { GROQ_API_KEY: "k" }, fetchImpl: async () => ({ ok: true, status: 200, headers: new Map(), json: async () => ({ text: "x" }) }) });
+    await expect(service.transcribe({ chunks: ["AAAA"], sampleRate: 8000 })).rejects.toMatchObject({ code: "unsupported_sample_rate" });
+  });
+
+  it("splits daemon arguments on the first = only", async () => {
+    const { parseArgs } = await import("../../src/spawner/daemon.mjs");
+    expect(parseArgs(["--dir", "/tmp", "--label", "a=b"])).toMatchObject({ dir: "/tmp", label: "a=b" });
+    expect(parseArgs(["--dir=/tmp", "--label=a=b"])).toMatchObject({ dir: "/tmp", label: "a=b" });
   });
 });

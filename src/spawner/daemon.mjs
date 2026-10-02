@@ -20,10 +20,13 @@ import { PiNetSocket } from "../common/ws-client.mjs";
 import { loadHostState } from "../host/onboarding.mjs";
 import { SessionSpawner, detectGit, detectTmux } from "../host/spawner.mjs";
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i += 1) {
-    const [flag, inline] = argv[i].split("=");
+    // Split on the FIRST "=" only: a label or path may legitimately contain one.
+    const separator = argv[i].indexOf("=");
+    const flag = separator >= 0 ? argv[i].slice(0, separator) : argv[i];
+    const inline = separator >= 0 ? argv[i].slice(separator + 1) : undefined;
     if (!flag.startsWith("--")) continue;
     const key = flag.slice(2);
     const value = inline ?? (argv[i + 1]?.startsWith("--") ? undefined : argv[i + 1]);

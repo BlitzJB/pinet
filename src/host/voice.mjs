@@ -170,7 +170,20 @@ export class VoiceSpool {
     return Boolean(this.dir);
   }
 
+  /**
+   * A spool id is a filename, and `retry` takes one from a controller command, so
+   * it is validated rather than trusted: `join(dir, "../../x.json")` escapes the
+   * spool, and `mark` *writes*. Ids are generated here, so a strict pattern costs
+   * nothing.
+   */
+  static #SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
+
+  static isSafeId(id) {
+    return typeof id === "string" && VoiceSpool.#SAFE_ID.test(id) && !id.includes("..");
+  }
+
   #path(id, extension) {
+    if (!VoiceSpool.isSafeId(id)) throw new VoiceError("bad_spool_id", String(id).slice(0, 40));
     return join(this.dir, `${id}.${extension}`);
   }
 
@@ -206,8 +219,9 @@ export class VoiceSpool {
     try {
       const meta = JSON.parse(readFileSync(this.#path(id, "json"), "utf8"));
       writeFileSync(this.#path(id, "json"), JSON.stringify({ ...meta, ...patch }, null, 2));
-    } catch {
-      /* the take was pruned */
+    } catch (error) {
+      // Worth a line: it means the spool and its metadata disagree.
+      console.error("[voice] spool mark failed", id, String(error?.message ?? error));
     }
   }
 
@@ -645,7 +659,11 @@ export class RateLimiter {
     if (status === 429) {
       this.throttled += 1;
       this.concurrency = Math.max(this.minConcurrency, Math.floor(this.concurrency / 2));
-      const until = this.now() + Math.max(parseRetryAfter(header("retry-after"), this.now()) ?? 0, parseDuration(header("x-ratelimit-reset-requests")) ?? 0, 250);
+      // Clamped: the value comes from a response header, and an absurd one would
+      // otherwise park every future request behind it.
+      const until =
+        this.now() +
+        Math.min(60_000, Math.max(parseRetryAfter(header("retry-after"), this.now()) ?? 0, parseDuration(header("x-ratelimit-reset-requests")) ?? 0, 250));
       this.gateUntil = Math.max(this.gateUntil, until);
       this.#pump();
       return;

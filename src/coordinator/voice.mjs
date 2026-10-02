@@ -13,7 +13,7 @@
 // The pipeline is the same code the host ran (../host/voice.mjs) — it was already
 // transport-agnostic, which is why this is a wiring change rather than a port.
 
-import { DEFAULT_POLICIES, VoicePipeline, createCleaner, createTranscriber } from "../host/voice.mjs";
+import { DEFAULT_POLICIES, VoiceError, VoicePipeline, createCleaner, createTranscriber } from "../host/voice.mjs";
 
 /** ~10 minutes of 16kHz mono PCM16, base64-encoded, plus JSON framing. */
 export const MAX_TAKE_BYTES = 24 * 1024 * 1024;
@@ -43,6 +43,9 @@ export function createVoiceService({ env = process.env, fetchImpl = fetch } = {}
       fetchImpl,
     }),
     policies: { ...DEFAULT_POLICIES, terms: [...new Set([...DEFAULT_POLICIES.terms, ...extra])] },
+    // The endpoint accepts up to MAX_TAKE_BYTES; without this the pipeline's own
+    // 2-minute default silently truncated anything longer while the UI claimed ten.
+    maxBytes: MAX_TAKE_BYTES,
   });
 
   return {
@@ -54,6 +57,10 @@ export function createVoiceService({ env = process.env, fetchImpl = fetch } = {}
      * the browser's own buffer rather than from a spool on this server.
      */
     async transcribe({ chunks = [], sampleRate } = {}) {
+      // The recorder always sends 16kHz; anything else would be mis-wrapped as WAV.
+      if (sampleRate !== undefined && Number(sampleRate) !== 16_000) {
+        throw new VoiceError("unsupported_sample_rate", `expected 16000, got ${sampleRate}`);
+      }
       const parts = (Array.isArray(chunks) ? chunks : [])
         .map((data, index) => ({ index, data }))
         .filter((chunk) => typeof chunk.data === "string" && chunk.data);

@@ -29,6 +29,21 @@ const execFileAsync = promisify(execFile);
 
 export const SPAWN_MODES = ["session", "worktree", "off"];
 
+/**
+ * Spawn, but never let an asynchronous failure take the process down.
+ *
+ * `child_process.spawn` reports ENOENT and friends by emitting "error", and an
+ * unhandled "error" event on an EventEmitter throws. The tmux path discards the
+ * child handle, so a failing `tmux new-session` — or a `kill-session` against a
+ * dead server — would have crashed the host pi process, taking the user's session
+ * with it.
+ */
+function spawnGuarded(spawnFn, ...args) {
+  const child = spawnFn(...args);
+  child?.on?.("error", () => {});
+  return child;
+}
+
 const ADJECTIVES = [
   "graceful", "quiet", "bright", "swift", "calm", "clever",
   "bold", "gentle", "lucky", "steady", "crisp", "wandering",
@@ -211,7 +226,7 @@ export class SessionSpawner {
     if (this.tmux) {
       const tmuxName = `pinet-${sessionId.slice(0, 8)}`;
       try {
-        this.spawnFn(
+        spawnGuarded(this.spawnFn, 
           this.tmux,
           ["new-session", "-d", "-s", tmuxName, "-c", cwd, this.#tmuxCommand({ sessionId, name: sessionName })],
           { stdio: "ignore" },
@@ -225,7 +240,7 @@ export class SessionSpawner {
 
     let child;
     try {
-      child = this.spawnFn(this.piBin, this.buildArgs({ sessionId, name: sessionName }), {
+      child = spawnGuarded(this.spawnFn, this.piBin, this.buildArgs({ sessionId, name: sessionName }), {
         cwd,
         env: { ...this.env, PINET_SPAWNED: "1" },
         stdio: ["pipe", "pipe", "pipe"],
@@ -251,7 +266,7 @@ export class SessionSpawner {
     this.#children.delete(sessionId);
     if (record.detached) {
       try {
-        this.spawnFn(this.tmux, ["kill-session", "-t", record.tmuxName], { stdio: "ignore" });
+        spawnGuarded(this.spawnFn, this.tmux, ["kill-session", "-t", record.tmuxName], { stdio: "ignore" });
       } catch {
         /* already gone */
       }
