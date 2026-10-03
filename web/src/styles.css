@@ -281,3 +281,15 @@ body {
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* The composer's command palette grows out of the card rather than appearing. */
+@keyframes pinet-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

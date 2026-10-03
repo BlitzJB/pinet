@@ -74,10 +74,18 @@ function StartingSession({ name }: { name?: string | null }) {
 export function ThreadView({ sessionId }: { sessionId: string }) {
   const connection = usePiNet();
 
+  const conn = useConnectionState();
+  const state = useSessionState(sessionId);
+
   // Slash commands and file paths both come from the host: it knows which commands
   // this session registered, and it owns the directory the mentions point into.
   const [commands, setCommands] = useState<CommandInfo[]>([]);
+  // Gated on `attached`: controller.command() throws until the session is attached
+  // and its key has arrived, and the throw happens on mount, before the attach
+  // effect has run. Swallowing that left the palette permanently empty.
+  const attached = state.attached;
   useEffect(() => {
+    if (!attached) return;
     let cancelled = false;
     void connection
       .commands(sessionId)
@@ -88,10 +96,8 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [connection, sessionId]);
+  }, [connection, sessionId, attached]);
   const loadFiles = useCallback((prefix: string) => connection.files(sessionId, prefix), [connection, sessionId]);
-  const conn = useConnectionState();
-  const state = useSessionState(sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [atTop, setAtTop] = useState(false);

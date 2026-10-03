@@ -4,7 +4,6 @@ import { cn } from "../../lib/utils";
 import type { ModelInfo } from "../../lib/pinet";
 import { appendPeaks, startVoiceRecorder, MicError, type VoiceRecorder } from "../../lib/voice";
 import { activeToken, commandAtStart, commandItems, fileItems, replaceToken, tuiOnlyNotice, type CommandInfo, type MenuItem, type Token } from "../../lib/mentions";
-import { AnchoredMenu } from "../ui/AnchoredMenu";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ghostButton, iconSwap, iconSwapIn, iconSwapOut, paper } from "../ui/surfaces";
@@ -209,6 +208,13 @@ export function Composer({
   const items: MenuItem[] = menu?.token.kind === "mention" ? fileItems(fileMatches) : commandItems(commands ?? [], menu?.token.query ?? "");
   const menuOpen = menu !== null && items.length > 0;
   const active = menu ? Math.min(menu.index, Math.max(0, items.length - 1)) : 0;
+  const listRef = useRef<HTMLDivElement>(null);
+  const activeRef = useRef<HTMLButtonElement>(null);
+
+  // With only four rows visible, the highlighted one has to be kept in view.
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [active, menuOpen]);
 
   /** Recompute the token under the caret. The highlighted row survives typing. */
   function syncMenu(next?: string) {
@@ -261,26 +267,49 @@ export function Composer({
   return (
     <div className={cn(paper, "flex w-full flex-col gap-1 rounded-[24px] p-2.5 shadow-lg shadow-black/5 transition-colors")}>
       {menuOpen && (
-        <AnchoredMenu anchor={textareaRef.current} onClose={() => setMenu(null)} width={320}>
-          {items.map((item, index) => (
-            <button
-              key={item.value}
-              type="button"
-              disabled={item.disabled}
-              onMouseEnter={() => setMenu((current) => current && { ...current, index })}
-              onClick={() => accept(item)}
-              className={cn(
-                "flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] transition-colors",
-                index === active && !item.disabled ? "bg-foreground/[0.06]" : "hover:bg-foreground/[0.04]",
-                item.disabled && "opacity-45",
-              )}
-            >
-              <span className="shrink-0 font-medium">{item.label}</span>
-              {item.hint && <span className="shrink-0 text-[10.5px] text-muted-foreground/55">{item.hint}</span>}
-              {item.description && <span className="ml-auto truncate text-[10.5px] text-muted-foreground/55">{item.description}</span>}
-            </button>
-          ))}
-        </AnchoredMenu>
+        // An extension of the composer rather than a floating overlay: it grows out
+        // of the card, shows four rows, and scrolls for the rest.
+        <div
+          className="overflow-hidden rounded-2xl border border-border/50 bg-background/70"
+          style={{ animation: "pinet-pop 150ms cubic-bezier(0.2, 0.8, 0.2, 1)" }}
+        >
+          <div ref={listRef} className="max-h-[168px] overflow-y-auto overscroll-contain py-1">
+            {items.map((item, index) => (
+              <button
+                key={item.value}
+                ref={index === active ? activeRef : undefined}
+                type="button"
+                disabled={item.disabled}
+                onMouseEnter={() => setMenu((current) => current && { ...current, index })}
+                onClick={() => accept(item)}
+                className={cn(
+                  "flex w-full items-center justify-between gap-3 px-3 py-[11px] text-left transition-colors",
+                  index === active && !item.disabled ? "bg-foreground/[0.06]" : "hover:bg-foreground/[0.04]",
+                  item.disabled && "opacity-45",
+                )}
+              >
+                {/* The match on the left, its description on the right. */}
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="truncate text-[13px] font-medium">{item.label}</span>
+                  {item.hint && <span className="shrink-0 text-[10.5px] text-muted-foreground/50">{item.hint}</span>}
+                </span>
+                {item.description && (
+                  <span className="max-w-[46%] shrink-0 truncate text-right text-[11px] text-muted-foreground/60">
+                    {item.description}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setMenu(null)}
+            className="flex w-full items-center justify-between border-t border-border/40 px-3 py-2.5 text-[12px] text-muted-foreground/70 transition-colors hover:bg-foreground/[0.04]"
+          >
+            <span>Cancel</span>
+            <span className="text-[10.5px] text-muted-foreground/40">esc</span>
+          </button>
+        </div>
       )}
       <textarea
         ref={textareaRef}
