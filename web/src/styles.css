@@ -293,3 +293,15 @@ body {
     transform: none;
   }
 }
+
+/* ...and sinks back behind the composer, so closing is not a snap. */
+@keyframes pinet-sink {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(26px);
+  }
+}

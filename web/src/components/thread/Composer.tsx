@@ -64,6 +64,9 @@ export function Composer({
   const [notice, setNotice] = useState<string | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ token: Token; index: number } | null>(null);
+  // `visible` is the sheet being open; `menu` stays set a moment longer while it
+  // sinks, so the exit can animate before it leaves the tree.
+  const [visible, setVisible] = useState(false);
   const [fileMatches, setFileMatches] = useState<string[]>([]);
   const [retryTake, setRetryTake] = useState<string[] | null>(null);
   const takeRef = useRef<string[]>([]);
@@ -87,7 +90,7 @@ export function Composer({
       setNotice(tuiOnlyNotice(terminalOnly.name));
       return;
     }
-    setMenu(null);
+    showSheet(false);
     const value = text.trim();
     if (!value || disabled) return;
     setText("");
@@ -206,7 +209,9 @@ export function Composer({
   // -- `/` commands and `@` mentions -----------------------------------------
 
   const items: MenuItem[] = menu?.token.kind === "mention" ? fileItems(fileMatches) : commandItems(commands ?? [], menu?.token.query ?? "");
-  const menuOpen = menu !== null && items.length > 0;
+  const mounted = menu !== null && items.length > 0;
+  // Only an open sheet takes keys; a sinking one must not swallow Enter.
+  const menuOpen = mounted && visible;
   const active = menu ? Math.min(menu.index, Math.max(0, items.length - 1)) : 0;
   const listRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -216,13 +221,40 @@ export function Composer({
     activeRef.current?.scrollIntoView({ block: "nearest" });
   }, [active, menuOpen]);
 
+  const closeTimer = useRef<number | undefined>(undefined);
+
+  /** Open the sheet, or let it sink before it is unmounted. */
+  function showSheet(open: boolean) {
+    window.clearTimeout(closeTimer.current);
+    if (open) {
+      setVisible(true);
+      return;
+    }
+    setVisible(false);
+    closeTimer.current = window.setTimeout(() => setMenu(null), 180);
+  }
+
   /** Recompute the token under the caret. The highlighted row survives typing. */
   function syncMenu(next?: string) {
     const element = textareaRef.current;
     const value = next ?? text;
     const token = activeToken(value, element?.selectionStart ?? value.length);
-    setMenu((current) => (token ? { token, index: current && current.token.kind === token.kind ? current.index : 0 } : null));
+    if (!token) {
+      showSheet(false);
+      return;
+    }
+    setMenu((current) => ({ token, index: current && current.token.kind === token.kind ? current.index : 0 }));
+    showSheet(true);
   }
+
+  // Nothing matched, so there is nothing to show: sink it rather than leaving an
+  // empty box behind the composer.
+  useEffect(() => {
+    if (menu && items.length === 0) showSheet(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menu, items.length]);
+
+  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 
   // Held in a ref: an inline `loadFiles` from the parent changes identity every
   // render, which would otherwise re-run this effect on every keystroke.
@@ -249,7 +281,7 @@ export function Composer({
     if (!menu || item.disabled) return;
     const { text: next, caret } = replaceToken(text, menu.token, item.insert);
     setText(next);
-    setMenu(null);
+    showSheet(false);
     requestAnimationFrame(() => {
       const element = textareaRef.current;
       if (!element) return;
@@ -266,7 +298,7 @@ export function Composer({
 
   return (
     <div className="relative w-full">
-      {menuOpen && (
+      {mounted && (
         // A sheet that rises from behind the composer: it is tucked under the card's
         // top edge, so it reads as sliding out of it rather than floating over it.
         <div
@@ -277,7 +309,13 @@ export function Composer({
             // matters because the rise animation owns `transform`.
             "absolute inset-x-3.5 z-0 flex flex-col overflow-hidden rounded-t-[22px] rounded-b-none border-b-0 shadow-[0_-10px_30px_-18px_rgba(0,0,0,0.35)]",
           )}
-          style={{ bottom: "calc(100% - 14px)", animation: "pinet-rise 200ms cubic-bezier(0.2, 0.8, 0.2, 1)" }}
+          style={{
+            bottom: "calc(100% - 14px)",
+            // `forwards` holds the sunk state for the moment before unmounting.
+            animation: visible
+              ? "pinet-rise 200ms cubic-bezier(0.2, 0.8, 0.2, 1)"
+              : "pinet-sink 180ms cubic-bezier(0.4, 0, 1, 1) forwards",
+          }}
         >
           <div className="flex items-center justify-between px-3.5 pb-0.5 pt-2.5">
             <span className="text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground/45">
@@ -285,7 +323,7 @@ export function Composer({
             </span>
             <button
               type="button"
-              onClick={() => setMenu(null)}
+              onClick={() => showSheet(false)}
               className="rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground/60 transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
             >
               Cancel
@@ -347,7 +385,7 @@ export function Composer({
             }
             if (event.key === "Escape") {
               event.preventDefault();
-              setMenu(null);
+              showSheet(false);
               return;
             }
           }
