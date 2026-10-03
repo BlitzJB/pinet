@@ -159,26 +159,28 @@ export const ToolCard = memo(function ToolCard({ name, args, output, error, runn
           )}
         </button>
 
-        {hasBody && (
-          <button
-            type="button"
-            onClick={() => void copy()}
-            aria-label={copied ? "Copied" : "Copy output"}
-            className={cn(
-              ghostButton,
-              "size-6 shrink-0 rounded-md p-0 opacity-0 transition-opacity group-hover/tool:opacity-100 focus-visible:opacity-100",
-              flat ? "mr-0" : "mr-2",
-            )}
-          >
-            {copied ? <CheckIcon className="size-3 text-emerald-500" /> : <CopyIcon className="size-3" />}
-          </button>
-        )}
       </div>
 
       {hasBody && (
         <CollapsibleContent open={open}>
           <div className={flat ? "px-1 pb-3" : "px-3 pb-3"}>
-            {view.diff?.length ? <DiffView lines={view.diff} /> : null}
+            {/* The copy sits on the output rather than in the header. In the header it
+                occupied a slot to the right of the chevron, which pushed the chevron
+                out of line with the thinking block above — and a copy button belongs
+                with the thing it copies anyway. */}
+            <div className="group/out relative">
+              <button
+                type="button"
+                onClick={() => void copy()}
+                aria-label={copied ? "Copied" : "Copy output"}
+                className={cn(
+                  ghostButton,
+                  "absolute right-1.5 top-1.5 z-10 size-6 rounded-md bg-background/85 p-0 opacity-0 backdrop-blur-sm transition-opacity group-hover/out:opacity-100 focus-visible:opacity-100",
+                )}
+              >
+                {copied ? <CheckIcon className="size-3 text-emerald-500" /> : <CopyIcon className="size-3" />}
+              </button>
+              {view.diff?.length ? <DiffView lines={view.diff} /> : null}
             {shown.text.trim() && (
               <>
                 <pre
@@ -199,8 +201,9 @@ export const ToolCard = memo(function ToolCard({ name, args, output, error, runn
                     Show all {shown.total} lines
                   </button>
                 )}
-              </>
-            )}
+                </>
+              )}
+            </div>
           </div>
         </CollapsibleContent>
       )}
