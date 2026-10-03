@@ -282,11 +282,11 @@ body {
   background: transparent;
 }
 
-/* The composer's command palette grows out of the card rather than appearing. */
-@keyframes pinet-pop {
+/* The command sheet rises from behind the composer rather than appearing. */
+@keyframes pinet-rise {
   from {
     opacity: 0;
-    transform: translateY(6px) scale(0.98);
+    transform: translateY(26px);
   }
   to {
     opacity: 1;

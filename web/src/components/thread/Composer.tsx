@@ -265,15 +265,30 @@ export function Composer({
   const stopping = busy && !hasText;
 
   return (
-    <div className={cn(paper, "flex w-full flex-col gap-1 rounded-[24px] p-2.5 shadow-lg shadow-black/5 transition-colors")}>
+    <div className="relative w-full">
       {menuOpen && (
-        // An extension of the composer rather than a floating overlay: it grows out
-        // of the card, shows four rows, and scrolls for the rest.
+        // A sheet that rises from behind the composer: it is tucked under the card's
+        // top edge, so it reads as sliding out of it rather than floating over it.
         <div
-          className="overflow-hidden rounded-2xl border border-border/50 bg-background/70"
-          style={{ animation: "pinet-pop 150ms cubic-bezier(0.2, 0.8, 0.2, 1)" }}
+          className={cn(
+            paper,
+            "absolute inset-x-0 z-0 flex flex-col overflow-hidden rounded-t-[22px] rounded-b-none border-b-0 shadow-[0_-10px_30px_-18px_rgba(0,0,0,0.35)]",
+          )}
+          style={{ bottom: "calc(100% - 14px)", animation: "pinet-rise 200ms cubic-bezier(0.2, 0.8, 0.2, 1)" }}
         >
-          <div ref={listRef} className="max-h-[168px] overflow-y-auto overscroll-contain py-1">
+          <div className="flex items-center justify-between px-3.5 pb-0.5 pt-2.5">
+            <span className="text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground/45">
+              {menu?.token.kind === "mention" ? "Files" : "Commands"}
+            </span>
+            <button
+              type="button"
+              onClick={() => setMenu(null)}
+              className="rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground/60 transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
+            >
+              Cancel
+            </button>
+          </div>
+          <div ref={listRef} className="max-h-[168px] overflow-y-auto overscroll-contain pb-1">
             {items.map((item, index) => (
               <button
                 key={item.value}
@@ -283,7 +298,7 @@ export function Composer({
                 onMouseEnter={() => setMenu((current) => current && { ...current, index })}
                 onClick={() => accept(item)}
                 className={cn(
-                  "flex w-full items-center justify-between gap-3 px-3 py-[11px] text-left transition-colors",
+                  "flex w-full items-center justify-between gap-3 px-3.5 py-[11px] text-left transition-colors",
                   index === active && !item.disabled ? "bg-foreground/[0.06]" : "hover:bg-foreground/[0.04]",
                   item.disabled && "opacity-45",
                 )}
@@ -301,16 +316,9 @@ export function Composer({
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={() => setMenu(null)}
-            className="flex w-full items-center justify-between border-t border-border/40 px-3 py-2.5 text-[12px] text-muted-foreground/70 transition-colors hover:bg-foreground/[0.04]"
-          >
-            <span>Cancel</span>
-            <span className="text-[10.5px] text-muted-foreground/40">esc</span>
-          </button>
         </div>
       )}
+      <div className={cn(paper, "relative z-10 flex w-full flex-col gap-1 rounded-[24px] p-2.5 shadow-lg shadow-black/5 transition-colors")}>
       <textarea
         ref={textareaRef}
         value={text}
@@ -520,6 +528,7 @@ detail may be dropped from the model's view.
           </>
         }
       />
+    </div>
     </div>
   );
 }
