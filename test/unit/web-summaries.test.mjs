@@ -42,11 +42,12 @@ describe("run summaries: tidying the model's line", () => {
     expect(cleanSummary("1. Done — added the status board")).toBe("Done — added the status board");
   });
 
-  it("keeps up to three lines, and caps each line", () => {
+  it("keeps up to six lines, and caps each line", () => {
     expect(cleanSummary("Done — fixed the spawn scope check\nStill to do: the picker")).toBe(
       "Done — fixed the spawn scope check\nStill to do: the picker",
     );
-    expect(cleanSummary("one\ntwo\nthree\nfour\nfive").split("\n")).toHaveLength(3);
+    expect(cleanSummary("one\ntwo\nthree\nfour\nfive").split("\n")).toHaveLength(5);
+    expect(cleanSummary("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight").split("\n")).toHaveLength(6);
     const long = cleanSummary("x".repeat(300));
     expect(long.split("\n")[0].length).toBeLessThanOrEqual(SUMMARY_MAX_LINE_CHARS);
     expect(long.endsWith("…")).toBe(true);
@@ -126,5 +127,94 @@ describe("run summaries: knowing the run is finished", () => {
     expect(isRunComplete({ running: false, settledAt: null, entries: entriesAt(now - 200_000) }, 180_000, now)).toBe(true);
     expect(isSettled(entriesAt(now - SUMMARY_QUIET_MS), SUMMARY_QUIET_MS, now)).toBe(true);
     expect(isSettled(entriesAt(now), SUMMARY_QUIET_MS, now)).toBe(false);
+  });
+});
+
+describe("run summaries: a dangling label", () => {
+  it("is dropped when there is other content, kept when it is all there is", async () => {
+    const { parseSummary } = await import("../../web/src/lib/summaries.ts");
+    // The model stopped after the label: no content to put under it.
+    expect(parseSummary("Done\nfixed the picker\nWaiting")).toEqual({
+      items: [{ label: "Done", text: "fixed the picker" }],
+    });
+    // Nothing else to show, so the badge still says something useful.
+    expect(parseSummary("Waiting")).toEqual({ items: [{ label: "Waiting", text: "" }] });
+  });
+});
+
+describe("run summaries: the log", () => {
+  it("records what was asked and what came back, without the text by default", async () => {
+    const { createSummaryService } = await import("../../src/coordinator/summary.mjs");
+    const records = [];
+    const service = createSummaryService({
+      env: { GROQ_API_KEY: "k" },
+      log: (record) => records.push(record),
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        json: async () => ({ choices: [{ message: { content: "Done — badge parser splits mid-sentence labels" } }] }),
+      }),
+    });
+    const result = await service.summarise({ user: "did you fix it?", assistant: "yes, here is how" });
+    expect(result.summary).toBe("Done — badge parser splits mid-sentence labels");
+    expect(records).toHaveLength(1);
+    const [entry] = records;
+    expect(entry).toMatchObject({ kind: "summary", model: "qwen/qwen3.8-27b", status: 200 });
+    expect(entry.raw).toContain("Done —");
+    expect(entry.summary).toBe(result.summary);
+    expect(entry.userChars).toBe(15);
+    expect(entry.hash).toHaveLength(12);
+    // Session content is not written to a file on the hub unless asked for.
+    expect(entry.input).toBeUndefined();
+  });
+
+  it("logs a failed call too, since that is what you want to see", async () => {
+    const { createSummaryService } = await import("../../src/coordinator/summary.mjs");
+    const records = [];
+    const service = createSummaryService({
+      env: { GROQ_API_KEY: "k" },
+      log: (record) => records.push(record),
+      fetchImpl: async () => ({ ok: false, status: 429, headers: new Map(), text: async () => "slow down" }),
+    });
+    await expect(service.summarise({ user: "a", assistant: "b" })).rejects.toThrow();
+    expect(records[0]).toMatchObject({ kind: "summary", status: 429, error: "http" });
+  });
+
+  it("writes one JSON line per call, and rotates past the cap", async () => {
+    const { createSummaryLog } = await import("../../src/coordinator/summary.mjs");
+    const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "pinet-summary-log-"));
+    const path = join(dir, "nested", "summaries.jsonl");
+    const log = createSummaryLog({ path, maxBytes: 200 });
+    for (let i = 0; i < 6; i += 1) log({ kind: "summary", summary: `line ${i}`, raw: `line ${i}` });
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    expect(lines.length).toBeLessThan(6);
+    expect(JSON.parse(lines[0]).at).toBeTruthy();
+    // The previous file is kept once, so nothing is silently lost.
+    expect(readFileSync(`${path}.1`, "utf8").length).toBeGreaterThan(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("run summaries: the model is not cut off", () => {
+  it("asks for a generous budget, without saying so in the prompt", async () => {
+    const { createSummaryService } = await import("../../src/coordinator/summary.mjs");
+    let sent;
+    const service = createSummaryService({
+      env: { GROQ_API_KEY: "k" },
+      log: () => {},
+      fetchImpl: async (_url, init) => {
+        sent = JSON.parse(init.body);
+        return { ok: true, status: 200, headers: new Map(), json: async () => ({ choices: [{ message: { content: "Done — ok" } }] }) };
+      },
+    });
+    await service.summarise({ user: "a", assistant: "b" });
+    // Room to finish a thought: 64 tokens truncated the output mid-sentence.
+    expect(sent.max_tokens).toBe(500);
+    // But the model is not told it has that much room, or it fills it.
+    expect(sent.messages[0].content).not.toMatch(/\b\d{3}\b/);
   });
 });

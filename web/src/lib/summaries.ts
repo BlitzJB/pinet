@@ -100,7 +100,10 @@ export function parseSummary(text: string | undefined): { items: SummaryItem[] }
       }
     }
   }
-  return { items };
+  // A label with nothing under it is the model stopping early. Drop it when there
+  // is other content, keep it when it is all we have — a bare "Waiting" still tells
+  // you the session wants something.
+  return { items: items.filter((item) => item.text || items.length === 1) };
 }
 
 summaryStore.subscribe(() => {
