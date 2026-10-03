@@ -65,6 +65,10 @@ export default function pinet(pi: Pi): void {
   const runningTools = new Map<string, { toolName: string; args: unknown }>();
   const queue = createSerialQueue();
   let currentRun: { id: string; startedAt: number } | undefined;
+  // When pi last reported the agent settled. This is the signal that a run is
+  // *finished*, as opposed to merely between turns, and it is what the controller
+  // uses to decide a session is worth summarising — no guessing with timers.
+  let lastSettledAt = 0;
   let compacting: { reason: string } | undefined;
   let compactingSince = 0;
   let runCounter = 0;
@@ -205,6 +209,7 @@ export default function pinet(pi: Pi): void {
       contextUsage: ctx.getContextUsage() ?? null,
       runningTools: [...runningTools.entries()].map(([toolCallId, tool]) => ({ toolCallId, toolName: tool.toolName, args: tool.args })),
       run: currentRun ? { id: currentRun.id, startedAt: currentRun.startedAt, state: "running" } : null,
+      settledAt: lastSettledAt || null,
       compacting: compacting ? { reason: compacting.reason } : null,
     };
   }
@@ -805,6 +810,7 @@ export default function pinet(pi: Pi): void {
 
   pi.on("agent_settled", async (_event, ctx) => {
     adopt(ctx);
+    lastSettledAt = Date.now();
     currentRun = undefined;
     runningTools.clear();
     syncEntries(ctx);

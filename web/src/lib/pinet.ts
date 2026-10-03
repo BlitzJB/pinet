@@ -31,6 +31,8 @@ export interface SessionStatus {
   contextUsage?: { tokens?: number | null; contextWindow?: number; percent?: number | null } | null;
   runningTools?: unknown[];
   run?: { id?: string; startedAt?: number; state?: string } | null;
+  /** Epoch ms when pi last reported the agent settled — the run is finished. */
+  settledAt?: number | null;
   compacting?: { reason?: string } | null;
 }
 

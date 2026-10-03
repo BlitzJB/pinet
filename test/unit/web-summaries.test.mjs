@@ -126,3 +126,26 @@ describe("run summaries: only once the session is done", () => {
     expect(isSettled([], SUMMARY_QUIET_MS, now)).toBe(true);
   });
 });
+
+describe("run summaries: the settle signal beats waiting", () => {
+  const entriesAt = (ms) => [{ kind: "assistant", id: "a1", text: "x", timestamp: ms }];
+
+  it("is complete as soon as the host says the agent settled", async () => {
+    const { isRunComplete } = await import("../../web/src/lib/summaries.ts");
+    const now = 1_000_000;
+    // Settled after the last entry: finished, no waiting required.
+    expect(isRunComplete({ running: false, settledAt: now, entries: entriesAt(now - 500) }, 180_000, now)).toBe(true);
+    expect(isRunComplete({ running: false, settledAt: now, entries: entriesAt(now - 1) }, 180_000, now)).toBe(true);
+    // Still running: never.
+    expect(isRunComplete({ running: true, settledAt: now, entries: entriesAt(now - 500) }, 180_000, now)).toBe(false);
+    // Settled *before* the newest entry means more work happened afterwards.
+    expect(isRunComplete({ running: false, settledAt: now - 5_000, entries: entriesAt(now) }, 180_000, now)).toBe(false);
+  });
+
+  it("falls back to the quiet period for a host that does not report it", async () => {
+    const { isRunComplete } = await import("../../web/src/lib/summaries.ts");
+    const now = 1_000_000;
+    expect(isRunComplete({ running: false, settledAt: null, entries: entriesAt(now - 10) }, 180_000, now)).toBe(false);
+    expect(isRunComplete({ running: false, settledAt: null, entries: entriesAt(now - 200_000) }, 180_000, now)).toBe(true);
+  });
+});

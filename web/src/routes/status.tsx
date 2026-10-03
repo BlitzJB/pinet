@@ -6,7 +6,7 @@ import { getMe } from "../lib/api";
 import { useConnectionState, usePiNet, useSessionState } from "../lib/context";
 import { groupSessionsByHost } from "../lib/session-groups";
 import { deriveRunFeedback } from "../lib/run-state";
-import { parseSummary, useRunSummary, type SummaryLabel } from "../lib/summaries";
+import { isRunComplete, parseSummary, useRunSummary, type SummaryLabel } from "../lib/summaries";
 import { RunIndicator } from "../components/thread/RunIndicator";
 import { cn } from "../lib/utils";
 
@@ -167,7 +167,10 @@ function SessionCard({
 
   const running = state.status?.phase === "running" || state.status?.isIdle === false;
   const feedback = deriveRunFeedback({ outbox: null, running, compacting: Boolean(state.status?.compacting) });
-  const { text: summary, previous } = useRunSummary(sessionId, state.entries, summaries && !running);
+  // Summarise when the run is finished, not when it merely pauses: the host says
+  // when pi's agent settled, so there is nothing to wait for.
+  const complete = isRunComplete({ running, settledAt: state.status?.settledAt, entries: state.entries });
+  const { text: summary, previous } = useRunSummary(sessionId, state.entries, summaries && complete);
   const { labels, body } = parseSummary(summary);
   const context = state.status?.contextUsage;
   const model = state.status?.model;

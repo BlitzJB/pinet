@@ -123,6 +123,29 @@ interface SummaryEntry {
   timestamp?: string | number;
 }
 
+/**
+ * Whether a session's work is finished and worth describing.
+ *
+ * Preferred signal: the host reports when pi's agent settled. If that is at or
+ * after the last entry written, the run is complete — so the summary can be
+ * generated immediately, with nothing to wait for. The quiet period is only a
+ * fallback for hosts that do not publish it yet.
+ */
+export function isRunComplete(
+  { running, settledAt, entries }: { running: boolean; settledAt?: number | null; entries: SummaryEntry[] },
+  quietMs = SUMMARY_QUIET_MS,
+  now = Date.now(),
+): boolean {
+  if (running) return false;
+  const stamp = entries?.[entries.length - 1]?.timestamp;
+  const lastAt = typeof stamp === "number" ? stamp : stamp ? Date.parse(stamp) : undefined;
+  if (typeof settledAt === "number" && Number.isFinite(settledAt)) {
+    // Settled before the newest entry means more work happened afterwards.
+    return lastAt === undefined || !Number.isFinite(lastAt) || settledAt >= lastAt;
+  }
+  return isSettled(entries, quietMs, now);
+}
+
 /** True when the session has stopped working long enough to be worth describing. */
 export function isSettled(entries: SummaryEntry[], quietMs = SUMMARY_QUIET_MS, now = Date.now()): boolean {
   const last = entries?.[entries.length - 1]?.timestamp;
