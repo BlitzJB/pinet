@@ -3,8 +3,10 @@ import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeftIcon, Minimize2Icon, SendIcon, SquareIcon } from "lucide-react";
 import { useConnectionState, usePiNet, useSessionState } from "../lib/context";
+import { getMe } from "../lib/api";
 import { groupSessionsByHost } from "../lib/session-groups";
 import { deriveRunFeedback } from "../lib/run-state";
+import { useRunSummary } from "../lib/summaries";
 import { RunIndicator } from "../components/thread/RunIndicator";
 import { cn } from "../lib/utils";
 
@@ -31,6 +33,7 @@ export function StatusPage() {
 
   const [now, setNow] = useState(() => new Date());
   const [awake, setAwake] = useState(true);
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 300_000 });
 
   // Attaching is what makes a session report status, so the board attaches to
   // everything it shows. Bounded, and only once per session.
@@ -115,7 +118,14 @@ export function StatusPage() {
                 </h2>
               </div>
               {group.sessions.map((session) => (
-                <SessionCard key={session.sessionId} sessionId={session.sessionId} name={session.meta?.name ?? session.sessionId.slice(0, 8)} host={session.hostName ?? ""} cwd={session.meta?.cwd ?? ""} />
+                <SessionCard
+                  key={session.sessionId}
+                  sessionId={session.sessionId}
+                  name={session.meta?.name ?? session.sessionId.slice(0, 8)}
+                  host={session.hostName ?? ""}
+                  cwd={session.meta?.cwd ?? ""}
+                  summaries={Boolean(me?.summary?.enabled)}
+                />
               ))}
             </div>
           ))}
@@ -125,9 +135,10 @@ export function StatusPage() {
   );
 }
 
-function SessionCard({ sessionId, name, cwd }: { sessionId: string; name: string; cwd: string; host: string }) {
+function SessionCard({ sessionId, name, cwd, summaries }: { sessionId: string; name: string; cwd: string; host: string; summaries: boolean }) {
   const connection = usePiNet();
   const state = useSessionState(sessionId);
+  const summary = useRunSummary(sessionId, state.entries, summaries && !(state.status?.phase === "running" || state.status?.isIdle === false));
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -165,7 +176,9 @@ function SessionCard({ sessionId, name, cwd }: { sessionId: string; name: string
         {feedback ? (
           <RunIndicator feedback={feedback} />
         ) : (
-          <span className="text-[12px] text-muted-foreground/45">{model?.name ?? "idle"}</span>
+          <span className="line-clamp-2 text-[12px] text-muted-foreground/60" title={summary ?? undefined}>
+            {summary ?? model?.name ?? "idle"}
+          </span>
         )}
       </div>
 

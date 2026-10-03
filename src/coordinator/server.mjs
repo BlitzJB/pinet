@@ -9,6 +9,7 @@ import { GoogleOAuth, GOOGLE_DEFAULTS } from "../auth/google.mjs";
 import { AuthService } from "../auth/service.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { createVoiceService } from "./voice.mjs";
+import { createSummaryService } from "./summary.mjs";
 import { createGateway } from "./ws.mjs";
 
 export function configFromEnv(env = process.env) {
@@ -47,7 +48,11 @@ export async function createCoordinator({ config = configFromEnv(), accounts, go
   // instead of two. See src/coordinator/voice.mjs for the trade being made.
   const voice = createVoiceService({ env: process.env });
   if (voice.enabled) console.log("[hub] voice: coordinator-side (audio is readable by this server)");
-  const handler = createHttpHandler({ accounts: store, authService, publicUrl, webDir: config.webDir, voice });
+  // One-line run summaries, generated out of band by a separate small model. The
+  // agent never writes them: see src/coordinator/summary.mjs.
+  const summary = createSummaryService({ env: process.env });
+  if (summary.enabled) console.log("[hub] summaries: on (reads the last exchange)");
+  const handler = createHttpHandler({ accounts: store, authService, publicUrl, webDir: config.webDir, voice, summary });
   server.on("request", (req, res) => void handler(req, res));
   const publicOrigin = (() => {
     try {

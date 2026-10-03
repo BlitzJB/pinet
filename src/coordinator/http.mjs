@@ -301,11 +301,13 @@ function validKeys(body) {
   return isValidPublicKey(body.identityPub, "ed25519") && isValidPublicKey(body.encPub, "x25519");
 }
 
-export function createHttpHandler({ accounts, authService, publicUrl, webDir = DEFAULT_WEB_DIR, voice = { enabled: false, side: null } }) {
+export function createHttpHandler({ accounts, authService, publicUrl, webDir = DEFAULT_WEB_DIR, voice = { enabled: false, side: null }, summary = { enabled: false } }) {
   const globalLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
   const sensitiveLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
   // Every take costs a provider round trip, so this is deliberately tight.
   const voiceLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+  // Summaries are cheap but not free, and are requested per finished run.
+  const summaryLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
   const fetchImpl = globalThis.fetch;
   const avatarCache = new Map();
   const avatarHosts = new Set();
@@ -453,8 +455,29 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
         url.pathname === "/auth/mfa/activate" ||
         url.pathname.startsWith("/devices") ||
         url.pathname === "/hosts/enroll/start" ||
-        url.pathname === "/voice/transcribe";
+        url.pathname === "/voice/transcribe" ||
+        url.pathname === "/summarize";
       if (protectedPath && !current) return json(res, 401, { error: "unauthorized" });
+
+      // One line describing a finished run. The client sends only the last
+      // exchange, and caches the answer per run, so this is called once per run at
+      // most. It never touches the session channel.
+      if (route === "POST /summarize") {
+        if (!summary.enabled) return json(res, 503, { error: "summary_disabled" });
+        if (!summaryLimiter.check(`summary:${current.accountId}`)) return json(res, 429, { error: "rate_limited" });
+        let body;
+        try {
+          body = await readBody(req, 64 * 1024);
+        } catch {
+          return json(res, 400, { error: "bad_request" });
+        }
+        try {
+          return json(res, 200, await summary.summarise({ user: body.user, assistant: body.assistant }));
+        } catch (error) {
+          console.error("[hub] summary failed:", String(error?.message ?? error));
+          return json(res, 502, { error: "summary_failed" });
+        }
+      }
 
       // Dictation, served here rather than on the session's host. Audio arrives on
       // its own endpoint, so it never enters the end-to-end session channel.
@@ -487,6 +510,7 @@ export function createHttpHandler({ accounts, authService, publicUrl, webDir = D
           // Where dictation happens, so the client does not have to guess or be
           // configured per host.
           voice: { enabled: Boolean(voice.enabled), side: voice.side },
+          summary: { enabled: Boolean(summary.enabled) },
           devices: accounts.listDevices(account.id).map((d) => ({ id: d.id, kind: d.kind, name: d.name, revoked: d.revoked })),
         });
       }

@@ -14,6 +14,8 @@ export interface Me {
   mfaEnrolled: boolean;
   /** Where dictation runs, so the client does not guess. */
   voice?: { enabled: boolean; side: string | null } | null;
+  /** Whether the hub can write one-line run summaries. */
+  summary?: { enabled: boolean } | null;
   devices: DeviceInfo[];
 }
 
@@ -51,6 +53,23 @@ export async function transcribeTake(chunks: string[], sampleRate = 16_000): Pro
     throw new Error(detail.error ?? `voice ${response.status}`);
   }
   return (await response.json()) as VoiceTake;
+}
+
+/**
+ * One line describing a finished run, written by the hub's summary model.
+ *
+ * Only the last exchange is sent, and the caller caches the answer per run, so
+ * this happens once per run rather than on every render.
+ */
+export async function summarizeExchange(user: string, assistant: string): Promise<{ summary: string }> {
+  const response = await fetch("/summarize", {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ user, assistant }),
+  });
+  if (!response.ok) throw new Error(`summary ${response.status}`);
+  return (await response.json()) as { summary: string };
 }
 
 export async function getMe(): Promise<Me | null> {

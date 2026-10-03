@@ -12,6 +12,7 @@ import { RenameInput } from "./ui/RenameInput";
 import { Avatar } from "./Avatar";
 import { SpawnDialog, type SpawnCapabilityInfo } from "./SpawnDialog";
 import { useStore } from "../lib/store";
+import { ensureSummary, lastExchange, summaryStore } from "../lib/summaries";
 
 const COLLAPSE_KEY = "pinet.collapsedHosts";
 
@@ -82,6 +83,11 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { primary: activeSessionId, side: sidePaneIds, availability, searchFor, openToSide } = usePanes();
   const me = useQuery({ queryKey: ["me"], queryFn: getMe, retry: false, staleTime: 30_000 });
   const catalog = useQuery({ queryKey: ["catalog"], queryFn: () => connection.list(), refetchInterval: 5_000 });
+  // One-line summaries of finished runs. The sidebar only has a transcript for
+  // sessions this browser has loaded, so it summarises those; the status board
+  // attaches properly and covers every session.
+  const { bySession } = useStore(summaryStore);
+  const summariesEnabled = Boolean(me.data?.summary?.enabled);
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [editing, setEditing] = useState<string | null>(null);
@@ -136,6 +142,14 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
     () => spawnerList.filter((entry) => !spawnTarget?.hostId || entry.deviceId === spawnTarget.hostId),
     [spawnerList, spawnTarget?.hostId],
   );
+
+  useEffect(() => {
+    if (!summariesEnabled) return;
+    for (const session of sessions) {
+      const exchange = lastExchange(connection.store(session.sessionId).get().entries as never);
+      if (exchange) ensureSummary(session.sessionId, exchange.at, exchange.user, exchange.assistant);
+    }
+  }, [summariesEnabled, connection, sessions, bySession]);
 
   /** Create a session through the chosen spawner, in the chosen subdirectory. */
   async function createSession(options: { spawnerId: string; name?: string; dir?: string }): Promise<void> {
@@ -280,7 +294,14 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                       )}
                     >
                       <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
+                        {bySession[session.sessionId]?.text && (
+                          <span className="block truncate text-[11px] leading-tight text-muted-foreground/55" title={bySession[session.sessionId].text}>
+                            {bySession[session.sessionId].text}
+                          </span>
+                        )}
+                      </span>
                       {sidePaneIds.includes(session.sessionId) && (
                         <PanelRightIcon
                           className="size-3 shrink-0 text-muted-foreground/50"
