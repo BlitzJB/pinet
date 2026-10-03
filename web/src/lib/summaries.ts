@@ -49,20 +49,34 @@ const LABELS = ["Done", "Answered", "Waiting", "Blocked", "No changes"] as const
 export type SummaryLabel = (typeof LABELS)[number];
 
 /**
- * Split the leading label off a summary, so the list can show whether the session
- * needs you at a glance. Anything unrecognised is left as body text.
+ * Split the leading labels off a summary, so the list can show whether the session
+ * needs you before you read a word. Models sometimes return more than one
+ * ("Waiting, Blocked — …"), which is useful: the most urgent is shown first.
  */
-export function parseSummary(text: string | undefined): { label?: SummaryLabel; body: string[] } {
+export function parseSummary(text: string | undefined): { labels: SummaryLabel[]; body: string[] } {
   const lines = String(text ?? "")
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  if (!lines.length) return { body: [] };
-  const match = /^(Done|Answered|Waiting|Blocked|No changes)\s*(?:—|–|-|:)\s*(.*)$/i.exec(lines[0]);
-  if (!match) return { body: lines };
-  const label = LABELS.find((candidate) => candidate.toLowerCase() === match[1].toLowerCase());
-  const rest = [match[2], ...lines.slice(1)].filter(Boolean);
-  return { label, body: rest.length ? rest : [lines[0]] };
+  if (!lines.length) return { labels: [], body: [] };
+
+  const labels: SummaryLabel[] = [];
+  let head = lines[0];
+  for (;;) {
+    // Separators may lead: "Waiting, Blocked — …" leaves a comma in front.
+    const candidate = head.replace(/^[\s,/&+\u2014-]+/, "");
+    const match = /^(Done|Answered|Waiting|Blocked|No changes)\b/i.exec(candidate);
+    if (!match) break;
+    const label = LABELS.find((entry) => entry.toLowerCase() === match[1].toLowerCase());
+    if (!label) break;
+    // A repeat is consumed rather than left in the body, but only shown once.
+    if (!labels.includes(label)) labels.push(label);
+    head = candidate.slice(match[0].length).replace(/^[\s,:\u2014-]+/, "").trim();
+    if (!head) break;
+  }
+
+  const body = [head, ...lines.slice(1)].filter(Boolean);
+  return { labels, body: body.length ? body : [lines[0]] };
 }
 
 summaryStore.subscribe(() => {

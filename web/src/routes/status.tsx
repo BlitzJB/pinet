@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftIcon, Minimize2Icon, SendIcon, SquareIcon } from "lucide-react";
-import { useConnectionState, usePiNet, useSessionState } from "../lib/context";
+import { ChevronDownIcon, MessageSquareIcon, SendIcon, XIcon } from "lucide-react";
 import { getMe } from "../lib/api";
+import { useConnectionState, usePiNet, useSessionState } from "../lib/context";
 import { groupSessionsByHost } from "../lib/session-groups";
 import { deriveRunFeedback } from "../lib/run-state";
 import { parseSummary, useRunSummary, type SummaryLabel } from "../lib/summaries";
@@ -14,15 +14,16 @@ import { cn } from "../lib/utils";
 const LIVE_LIMIT = 12;
 
 /**
- * A status board for a screen that is left on: every session, what it is doing,
- * and a way to say something to it.
+ * A board for a screen that is left on: every session, what it is doing, and what
+ * it last did.
  *
- * Live state comes from the ordinary status frames — attaching to a session is
- * what starts them, and once attached the updates are small, so there is no
- * polling here beyond the catalog (which is what discovers new sessions).
+ * No chrome. There is no header, no navigation and no per-card controls — you go
+ * into a session from the sidebar when you actually want to work in it. The only
+ * interaction is the message icon, which turns a card into an input, because the
+ * one thing worth doing from across the room is saying something to a session.
  *
- * Deliberately its own route rather than a mode of the session list: open
- * /app/status in the installed app, and it fills the screen.
+ * Live state comes from the ordinary status frames: attaching is what starts them,
+ * so there is no polling beyond the catalog that discovers new sessions.
  */
 export function StatusPage() {
   const connection = usePiNet();
@@ -30,9 +31,6 @@ export function StatusPage() {
   const catalog = useQuery({ queryKey: ["catalog"], queryFn: () => connection.list(), refetchInterval: 5_000 });
   const sessions = useMemo(() => catalog.data ?? [], [catalog.data]);
   const groups = useMemo(() => groupSessionsByHost(sessions), [sessions]);
-
-  const [now, setNow] = useState(() => new Date());
-  const [awake, setAwake] = useState(true);
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 300_000 });
 
   // Attaching is what makes a session report status, so the board attaches to
@@ -45,15 +43,9 @@ export function StatusPage() {
     }
   }, [connection, sessions]);
 
+  // Screen Wake Lock, always on: a board that lets the screen sleep is pointless.
+  // Chrome and Safari 16.4+ support it; elsewhere it degrades to nothing.
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1_000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Screen Wake Lock: the point of the page is to stay visible. Chrome and
-  // Safari 16.4+ support it; elsewhere the page still works, the screen just sleeps.
-  useEffect(() => {
-    if (!awake) return;
     type Sentinel = { release?: () => Promise<void> };
     let lock: Sentinel | undefined;
     const acquire = async () => {
@@ -73,69 +65,73 @@ export function StatusPage() {
       document.removeEventListener("visibilitychange", onVisible);
       void lock?.release?.();
     };
-  }, [awake]);
+  }, []);
+
+  const reconnecting = conn.status !== "connected";
+  // Nothing yet, and nothing wrong: the catalog is in flight, or it arrived empty
+  // and the attachments are still warming up.
+  const warming = catalog.isLoading || (sessions.length === 0 && !catalog.isError);
 
   return (
-    <div className="flex h-dvh flex-col bg-background text-foreground">
-      <header className="flex shrink-0 items-center gap-3 border-b border-border/50 px-4 py-3">
-        <Link to="/" className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground" title="Sessions">
-          <ArrowLeftIcon className="size-4" />
-        </Link>
-        <h1 className="text-[15px] font-medium tracking-tight">Status</h1>
-        <span className="text-[12px] text-muted-foreground/60">
-          {sessions.length} session{sessions.length === 1 ? "" : "s"}
-          {conn.status !== "connected" && ` · ${conn.status}`}
-        </span>
-        <div className="ms-auto flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setAwake((value) => !value)}
-            className={cn(
-              "rounded-full px-2.5 py-1 text-[11.5px] transition-colors",
-              awake ? "bg-foreground/[0.06] text-foreground/80" : "text-muted-foreground hover:bg-foreground/[0.05]",
-            )}
-            title="Keep the screen awake while this page is open"
-          >
-            {awake ? "screen: awake" : "screen: normal"}
-          </button>
-          <time className="text-[13px] tabular-nums text-muted-foreground/70">{now.toLocaleTimeString()}</time>
-        </div>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {groups.length === 0 && (
-          <p className="mt-16 text-center text-[13px] text-muted-foreground/60">
-            {conn.status === "connected" ? "No sessions" : "Connecting…"}
-          </p>
+    <div className="h-dvh overflow-y-auto bg-background p-4 text-foreground">
+      {/* Reconnecting freezes the board rather than emptying it: muted, pulsing. */}
+      {reconnecting && (
+        <div
+          aria-hidden
+          className="pointer-events-none fixed inset-0 z-10 animate-pulse bg-background/50 motion-reduce:animate-none"
+        />
+      )}
+      <div
+        className={cn(
+          "mx-auto grid max-w-[100rem] gap-4 transition-opacity duration-300 sm:grid-cols-2 xl:grid-cols-3",
+          reconnecting && "pointer-events-none opacity-35",
         )}
-        <div className="mx-auto grid max-w-[100rem] gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {groups.map((group) => (
-            <div key={group.hostId} className="space-y-2">
-              <div className="flex items-center gap-2 px-1">
-                <span className={cn("size-1.5 rounded-full", group.hostConnected ? "bg-emerald-500" : "bg-foreground/25")} />
-                <h2 className="truncate text-[12.5px] text-muted-foreground" title={group.hostId}>
-                  {group.hostName}
-                </h2>
-              </div>
-              {group.sessions.map((session) => (
-                <SessionCard
-                  key={session.sessionId}
-                  sessionId={session.sessionId}
-                  name={session.meta?.name ?? session.sessionId.slice(0, 8)}
-                  host={session.hostName ?? ""}
-                  cwd={session.meta?.cwd ?? ""}
-                  summaries={Boolean(me?.summary?.enabled)}
-                />
-              ))}
+      >
+        {warming && Array.from({ length: 3 }, (_, index) => <SkeletonCard key={index} />)}
+        {!warming && sessions.length === 0 && (
+          <p className="col-span-full mt-24 text-center text-[13px] text-muted-foreground/50">No sessions</p>
+        )}
+        {groups.map((group) => (
+          <div key={group.hostId} className="space-y-2">
+            <div className="flex items-center gap-2 px-1">
+              <span className={cn("size-1.5 rounded-full", group.hostConnected ? "bg-emerald-500" : "bg-foreground/25")} />
+              <h2 className="truncate text-[12.5px] text-muted-foreground" title={group.hostId}>
+                {group.hostName}
+              </h2>
             </div>
-          ))}
-        </div>
+            {group.sessions.map((session) => (
+              <SessionCard
+                key={session.sessionId}
+                sessionId={session.sessionId}
+                name={session.meta?.name ?? session.sessionId.slice(0, 8)}
+                cwd={session.meta?.cwd ?? ""}
+                summaries={Boolean(me?.summary?.enabled)}
+              />
+            ))}
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-/** The label carries the answer to "does this need me?", so it is the loud part. */
+/** A card that has not loaded yet: the same silhouette, pulsing, with no content. */
+function SkeletonCard() {
+  return (
+    <div className="animate-pulse rounded-2xl border border-border/40 p-3 motion-reduce:animate-none">
+      <div className="flex items-center gap-2">
+        <div className="h-3 w-16 rounded bg-foreground/[0.07]" />
+        <div className="ms-auto h-3 w-8 rounded bg-foreground/[0.05]" />
+      </div>
+      <div className="mt-3 space-y-1.5">
+        <div className="h-3 w-11/12 rounded bg-foreground/[0.05]" />
+        <div className="h-3 w-2/3 rounded bg-foreground/[0.04]" />
+      </div>
+    </div>
+  );
+}
+
+/** The label answers "does this need me?", so it is the loud part of the card. */
 function LabelChip({ label }: { label: SummaryLabel }) {
   const tone =
     label === "Waiting"
@@ -145,134 +141,178 @@ function LabelChip({ label }: { label: SummaryLabel }) {
         : label === "Done"
           ? "bg-emerald-500/12 text-emerald-600 dark:text-emerald-400"
           : "bg-foreground/[0.06] text-muted-foreground";
-  return <span className={cn("mt-[2px] shrink-0 rounded px-1 py-[1px] text-[9.5px] font-medium uppercase tracking-wide", tone)}>{label}</span>;
+  return (
+    <span className={cn("shrink-0 rounded px-1.5 py-[1.5px] text-[9.5px] font-medium uppercase tracking-wide", tone)}>{label}</span>
+  );
 }
 
-function SessionCard({ sessionId, name, cwd, summaries }: { sessionId: string; name: string; cwd: string; host: string; summaries: boolean }) {
+function SessionCard({
+  sessionId,
+  name,
+  cwd,
+  summaries,
+}: {
+  sessionId: string;
+  name: string;
+  cwd: string;
+  summaries: boolean;
+}) {
   const connection = usePiNet();
   const state = useSessionState(sessionId);
-  const { text: summary, previous } = useRunSummary(
-    sessionId,
-    state.entries,
-    summaries && !(state.status?.phase === "running" || state.status?.isIdle === false),
-  );
-  const parsed = parseSummary(summary);
+  const [expanded, setExpanded] = useState(false);
+  const [composing, setComposing] = useState(false);
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const running = state.status?.phase === "running" || state.status?.isIdle === false;
   const feedback = deriveRunFeedback({ outbox: null, running, compacting: Boolean(state.status?.compacting) });
+  const { text: summary, previous } = useRunSummary(sessionId, state.entries, summaries && !running);
+  const { labels, body } = parseSummary(summary);
   const context = state.status?.contextUsage;
   const model = state.status?.model;
 
-  async function act(fn: () => Promise<unknown>) {
-    setBusy(true);
+  useEffect(() => {
+    if (composing) inputRef.current?.focus();
+  }, [composing]);
+
+  async function send() {
+    const value = text.trim();
+    if (!value) return;
+    setSending(true);
     try {
-      await fn();
+      await connection.prompt(sessionId, value);
+      setText("");
+      setComposing(false);
     } catch {
-      /* the next status frame will tell the truth */
+      /* the next status frame tells the truth */
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   }
 
+  // Whether the summary is worth an expander. Approximate: measuring would mean
+  // rendering it unclamped first.
+  const long = body.join(" ").length > 150 || body.length > 2;
+
   return (
-    <div className={cn("rounded-2xl border bg-foreground/[0.02] p-3", running ? "border-blue-500/25" : "border-border/50")}>
+    <div
+      className={cn(
+        "rounded-2xl border bg-foreground/[0.02] p-3 transition-[border-color,box-shadow] duration-200",
+        running ? "border-blue-500/25" : "border-border/50",
+        composing && "border-foreground/25 shadow-lg shadow-black/10",
+      )}
+    >
+      {/* Labels first, then the text — the label is what you scan for. */}
       <div className="flex items-start gap-2">
-        <Link to="/s/$sessionId" params={{ sessionId }} className="min-w-0 flex-1">
-          <p className="truncate text-[14px] font-medium leading-tight">{name}</p>
-          <p className="truncate text-[11px] text-muted-foreground/60" title={cwd}>
-            {cwd || "—"}
-          </p>
-        </Link>
-        <span className="shrink-0 text-[10.5px] tabular-nums text-muted-foreground/50">
-          {typeof context?.percent === "number" ? `${Math.round(context.percent)}%` : ""}
-        </span>
-      </div>
-
-      <div className="mt-2 min-h-5">
-        {feedback ? (
-          <RunIndicator feedback={feedback} />
-        ) : summary ? (
-          <div className="space-y-1">
-            <div className="flex items-start gap-1.5">
-              {parsed.label && <LabelChip label={parsed.label} />}
-              <span className="line-clamp-3 whitespace-pre-line text-[12px] text-muted-foreground/70" title={summary}>
-                {parsed.body.join("\n")}
-              </span>
-            </div>
-            {previous.length > 0 && (
-              <div className="border-t border-border/40 pt-1">
-                <p className="text-[9.5px] uppercase tracking-wide text-muted-foreground/40">Previously</p>
-                {previous.slice(0, 2).map((line, index) => (
-                  <p key={index} className="line-clamp-1 text-[11px] text-muted-foreground/45" title={line}>
-                    {parseSummary(line).body.join(" ")}
-                  </p>
-                ))}
-              </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
+          {labels.map((label) => (
+            <LabelChip key={label} label={label} />
+          ))}
+        </div>
+        <div className="ms-auto flex shrink-0 items-center gap-1.5">
+          <span className="text-[10.5px] tabular-nums text-muted-foreground/50">
+            {typeof context?.percent === "number" ? `${Math.round(context.percent)}%` : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => setComposing((value) => !value)}
+            className={cn(
+              "grid size-6 place-items-center rounded-lg transition-colors",
+              composing ? "bg-foreground text-background" : "text-muted-foreground/60 hover:bg-foreground/[0.06] hover:text-foreground",
             )}
+            title={composing ? "Cancel" : `Message ${name}`}
+            aria-label={composing ? "Cancel message" : `Message ${name}`}
+          >
+            {composing ? <XIcon className="size-3.5" /> : <MessageSquareIcon className="size-3.5" />}
+          </button>
+        </div>
+      </div>
+
+      <Link to="/s/$sessionId" params={{ sessionId }} className="mt-1.5 block min-w-0">
+        <p className="truncate text-[14px] font-medium leading-tight">{name}</p>
+        <p className="truncate text-[11px] text-muted-foreground/55" title={cwd}>
+          {cwd || "—"}
+        </p>
+      </Link>
+
+      {composing ? (
+        <form
+          className="mt-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void send();
+          }}
+        >
+          <textarea
+            ref={inputRef}
+            value={text}
+            rows={2}
+            disabled={sending}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                void send();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setComposing(false);
+                setText("");
+              }
+            }}
+            placeholder={`Message to ${name}`}
+            className="w-full resize-none rounded-lg border border-border/50 bg-background px-2 py-1.5 text-[12.5px] outline-none focus:border-foreground/25"
+          />
+          <div className="mt-1 flex items-center justify-end">
+            <button
+              type="submit"
+              disabled={sending || !text.trim()}
+              className="inline-flex items-center gap-1 rounded-lg bg-foreground px-2 py-1 text-[11.5px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-25"
+            >
+              <SendIcon className="size-3" />
+              Send
+            </button>
           </div>
-        ) : (
-          <span className="text-[12px] text-muted-foreground/45">{model?.name ?? "idle"}</span>
-        )}
-      </div>
-
-      <form
-        className="mt-2 flex items-center gap-1.5"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const value = text.trim();
-          if (!value) return;
-          setText("");
-          void act(() => connection.prompt(sessionId, value));
-        }}
-      >
-        <input
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          placeholder="Say something…"
-          className="min-w-0 flex-1 rounded-lg border border-border/50 bg-background px-2 py-1.5 text-[12.5px] outline-none focus:border-foreground/25"
-        />
-        <button
-          type="submit"
-          disabled={busy || !text.trim()}
-          className="grid size-7 shrink-0 place-items-center rounded-lg bg-foreground text-background transition-opacity hover:opacity-90 disabled:opacity-25"
-          title="Send"
-        >
-          <SendIcon className="size-3.5" />
-        </button>
-      </form>
-
-      <div className="mt-1.5 flex items-center gap-1.5">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void act(() => connection.prompt(sessionId, "continue"))}
-          className="rounded-full px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-40"
-        >
-          Continue
-        </button>
-        <button
-          type="button"
-          disabled={busy || !running}
-          onClick={() => void act(() => connection.abort(sessionId))}
-          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-40"
-          title="Stop the current run"
-        >
-          <SquareIcon className="size-2.5 fill-current" />
-          Stop
-        </button>
-        <button
-          type="button"
-          disabled={busy || running}
-          onClick={() => void act(() => connection.compact(sessionId))}
-          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-40"
-          title="Compact context"
-        >
-          <Minimize2Icon className="size-3" />
-          Compact
-        </button>
-      </div>
+        </form>
+      ) : (
+        <div className="mt-2">
+          {feedback ? (
+            <RunIndicator feedback={feedback} />
+          ) : summary ? (
+            <>
+              <div className={cn("relative", !expanded && long && "max-h-[2.6rem] overflow-hidden")}>
+                <p className="whitespace-pre-line text-[12.5px] leading-snug text-muted-foreground/75">{body.join("\n")}</p>
+                {!expanded && long && (
+                  <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-5 bg-gradient-to-t from-background to-transparent" />
+                )}
+              </div>
+              {long && (
+                <button
+                  type="button"
+                  onClick={() => setExpanded((value) => !value)}
+                  className="mt-0.5 inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10.5px] text-muted-foreground/60 shadow-sm transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
+                  aria-expanded={expanded}
+                >
+                  <ChevronDownIcon className={cn("size-3 transition-transform duration-200", expanded && "rotate-180")} />
+                  {expanded ? "Less" : "More"}
+                </button>
+              )}
+              {previous.length > 0 && (
+                <div className="mt-2 border-t border-border/40 pt-1.5">
+                  <p className="text-[9.5px] uppercase tracking-wide text-muted-foreground/40">Previously</p>
+                  {previous.slice(0, 2).map((line, index) => (
+                    <p key={index} className="truncate text-[11px] text-muted-foreground/45" title={line}>
+                      {parseSummary(line).body.join(" ")}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <span className="text-[12px] text-muted-foreground/45">{model?.name ?? "idle"}</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

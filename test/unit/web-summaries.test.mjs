@@ -78,19 +78,34 @@ describe("run summaries: history and labels", () => {
     expect(many).toHaveLength(5);
   });
 
-  it("splits the label off, so the list can show whether it needs you", async () => {
+  it("splits the labels off, so the list can show whether it needs you", async () => {
     const { parseSummary } = await import("../../web/src/lib/summaries.ts");
     expect(parseSummary("Waiting — which provider should the summariser use?")).toEqual({
-      label: "Waiting",
+      labels: ["Waiting"],
       body: ["which provider should the summariser use?"],
     });
     expect(parseSummary("Done — fixed the spawn scope check\nStill to do: the picker")).toEqual({
-      label: "Done",
+      labels: ["Done"],
       body: ["fixed the spawn scope check", "Still to do: the picker"],
     });
-    expect(parseSummary("No changes - investigated the timeout")).toEqual({ label: "No changes", body: ["investigated the timeout"] });
-    // Unlabelled text is shown as-is rather than guessed at.
-    expect(parseSummary("Something else entirely")).toEqual({ label: undefined, body: ["Something else entirely"] });
-    expect(parseSummary(undefined)).toEqual({ body: [] });
+    expect(parseSummary("No changes - investigated the timeout")).toEqual({ labels: ["No changes"], body: ["investigated the timeout"] });
+    expect(parseSummary("Something else entirely")).toEqual({ labels: [], body: ["Something else entirely"] });
+    expect(parseSummary(undefined)).toEqual({ labels: [], body: [] });
+  });
+
+  it("keeps more than one label when the model gives several", async () => {
+    const { parseSummary } = await import("../../web/src/lib/summaries.ts");
+    expect(parseSummary("Waiting, Blocked — needs a decision on the provider")).toEqual({
+      labels: ["Waiting", "Blocked"],
+      body: ["needs a decision on the provider"],
+    });
+    expect(parseSummary("Done / Waiting — shipped it, wants a review")).toEqual({
+      labels: ["Done", "Waiting"],
+      body: ["shipped it, wants a review"],
+    });
+    // A label mentioned later in the sentence is body text, not a label.
+    expect(parseSummary("Answered — the fix is Done")).toEqual({ labels: ["Answered"], body: ["the fix is Done"] });
+    // Repeats collapse rather than rendering twice.
+    expect(parseSummary("Done, Done — twice")).toEqual({ labels: ["Done"], body: ["twice"] });
   });
 });

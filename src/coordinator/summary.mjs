@@ -31,6 +31,8 @@ Start the first line with a label when one fits:
   Waiting — you ended by asking the user something, or need a decision, approval or feedback
   Blocked — you could not proceed
   No changes — you investigated or explained, and changed nothing
+More than one may apply: join them with a comma, most urgent first —
+"Waiting, Blocked — needs a decision on the provider".
 
 After the label, name the concrete thing: the feature, file or subsystem. A second line may give the current state — what is true now, what is left. A third line only if genuinely needed.
 
