@@ -272,7 +272,10 @@ export function Composer({
         <div
           className={cn(
             paper,
-            "absolute inset-x-0 z-0 flex flex-col overflow-hidden rounded-t-[22px] rounded-b-none border-b-0 shadow-[0_-10px_30px_-18px_rgba(0,0,0,0.35)]",
+            // Inset rather than full width, so it sits a little inside the composer and
+            // centred on it. `inset-x` keeps it centred without a transform, which
+            // matters because the rise animation owns `transform`.
+            "absolute inset-x-3.5 z-0 flex flex-col overflow-hidden rounded-t-[22px] rounded-b-none border-b-0 shadow-[0_-10px_30px_-18px_rgba(0,0,0,0.35)]",
           )}
           style={{ bottom: "calc(100% - 14px)", animation: "pinet-rise 200ms cubic-bezier(0.2, 0.8, 0.2, 1)" }}
         >
