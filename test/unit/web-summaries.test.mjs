@@ -109,3 +109,20 @@ describe("run summaries: history and labels", () => {
     expect(parseSummary("Done, Done — twice")).toEqual({ labels: ["Done"], body: ["twice"] });
   });
 });
+
+describe("run summaries: only once the session is done", () => {
+  it("waits for a quiet period, so a multi-turn task costs one call", async () => {
+    const { isSettled, SUMMARY_QUIET_MS } = await import("../../web/src/lib/summaries.ts");
+    const now = 1_000_000_000;
+    const entry = (agoMs) => [{ kind: "assistant", id: "a1", text: "x", timestamp: now - agoMs }];
+    // Just finished a turn: not settled, so nothing is generated yet.
+    expect(isSettled(entry(0), SUMMARY_QUIET_MS, now)).toBe(false);
+    expect(isSettled(entry(SUMMARY_QUIET_MS - 1), SUMMARY_QUIET_MS, now)).toBe(false);
+    // Quiet for the full period: now it is worth one line.
+    expect(isSettled(entry(SUMMARY_QUIET_MS), SUMMARY_QUIET_MS, now)).toBe(true);
+    expect(isSettled(entry(60 * 60_000), SUMMARY_QUIET_MS, now)).toBe(true);
+    // No timestamp to reason about: do not hold the line back.
+    expect(isSettled([{ kind: "assistant", id: "a1", text: "x" }], SUMMARY_QUIET_MS, now)).toBe(true);
+    expect(isSettled([], SUMMARY_QUIET_MS, now)).toBe(true);
+  });
+});

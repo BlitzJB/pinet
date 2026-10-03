@@ -193,7 +193,8 @@ function SessionCard({
 
   // Whether the summary is worth an expander. Approximate: measuring would mean
   // rendering it unclamped first.
-  const long = body.join(" ").length > 150 || body.length > 2;
+  // Roughly three lines at this width; measuring would mean rendering it unclamped.
+  const long = body.join(" ").length > 150;
 
   return (
     <div
@@ -203,14 +204,16 @@ function SessionCard({
         composing && "border-foreground/25 shadow-lg shadow-black/10",
       )}
     >
-      {/* Labels first, then the text — the label is what you scan for. */}
+      {/* The percentage and the message icon ride with the title, so a card with no
+          label has no empty row above it. */}
       <div className="flex items-start gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-1">
-          {labels.map((label) => (
-            <LabelChip key={label} label={label} />
-          ))}
-        </div>
-        <div className="ms-auto flex shrink-0 items-center gap-1.5">
+        <Link to="/s/$sessionId" params={{ sessionId }} className="min-w-0 flex-1">
+          <p className="truncate text-[14px] font-medium leading-tight">{name}</p>
+          <p className="truncate text-[11px] text-muted-foreground/55" title={cwd}>
+            {cwd || "—"}
+          </p>
+        </Link>
+        <div className="flex shrink-0 items-center gap-1.5">
           <span className="text-[10.5px] tabular-nums text-muted-foreground/50">
             {typeof context?.percent === "number" ? `${Math.round(context.percent)}%` : ""}
           </span>
@@ -228,13 +231,6 @@ function SessionCard({
           </button>
         </div>
       </div>
-
-      <Link to="/s/$sessionId" params={{ sessionId }} className="mt-1.5 block min-w-0">
-        <p className="truncate text-[14px] font-medium leading-tight">{name}</p>
-        <p className="truncate text-[11px] text-muted-foreground/55" title={cwd}>
-          {cwd || "—"}
-        </p>
-      </Link>
 
       {composing ? (
         <form
@@ -280,10 +276,27 @@ function SessionCard({
             <RunIndicator feedback={feedback} />
           ) : summary ? (
             <>
-              <div className={cn("relative", !expanded && long && "max-h-[2.6rem] overflow-hidden")}>
-                <p className="whitespace-pre-line text-[12.5px] leading-snug text-muted-foreground/75">{body.join("\n")}</p>
+              {labels.length > 0 && (
+                <div className="mb-1 flex flex-wrap items-center gap-1">
+                  {labels.map((label) => (
+                    <LabelChip key={label} label={label} />
+                  ))}
+                </div>
+              )}
+              {/* One paragraph, so the browser wraps it: long identifiers and URLs
+                  must not push the card wider than the grid. Clamped by line count
+                  rather than height, so it cannot grow past three lines. */}
+              <div className="relative">
+                <p
+                  className={cn(
+                    "text-[12.5px] leading-snug text-muted-foreground/75 [overflow-wrap:anywhere]",
+                    !expanded && long && "line-clamp-3",
+                  )}
+                >
+                  {body.join(" ")}
+                </p>
                 {!expanded && long && (
-                  <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-5 bg-gradient-to-t from-background to-transparent" />
+                  <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-background to-transparent" />
                 )}
               </div>
               {long && (
@@ -301,7 +314,7 @@ function SessionCard({
                 <div className="mt-2 border-t border-border/40 pt-1.5">
                   <p className="text-[9.5px] uppercase tracking-wide text-muted-foreground/40">Previously</p>
                   {previous.slice(0, 2).map((line, index) => (
-                    <p key={index} className="truncate text-[11px] text-muted-foreground/45" title={line}>
+                    <p key={index} className="line-clamp-1 text-[11px] text-muted-foreground/45 [overflow-wrap:anywhere]" title={line}>
                       {parseSummary(line).body.join(" ")}
                     </p>
                   ))}

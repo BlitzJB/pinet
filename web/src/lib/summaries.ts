@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { summarizeExchange } from "./api";
 import { Store, useStore } from "./store";
 
@@ -12,6 +12,15 @@ import { Store, useStore } from "./store";
  * goes. The hub sees the last exchange once, when the line is generated.
  */
 const STORAGE_KEY = "pinet.runSummaries.v2";
+/**
+ * How long a session must be quiet before it is summarised.
+ *
+ * The key is the final assistant entry, so without this a summary would be written
+ * after every single turn — an agent that takes six turns to finish a task would
+ * cost six calls, and five of them would describe work that was not finished. A
+ * quiet period means one line per finished stretch of work instead.
+ */
+export const SUMMARY_QUIET_MS = 3 * 60_000;
 const HISTORY = 5;
 
 export interface RunSummary {
@@ -110,6 +119,16 @@ interface SummaryEntry {
   id?: string;
   kind?: string;
   text?: string;
+  /** Epoch milliseconds on the client's entries, ISO string on the wire. */
+  timestamp?: string | number;
+}
+
+/** True when the session has stopped working long enough to be worth describing. */
+export function isSettled(entries: SummaryEntry[], quietMs = SUMMARY_QUIET_MS, now = Date.now()): boolean {
+  const last = entries?.[entries.length - 1]?.timestamp;
+  if (last === undefined || last === null) return true;
+  const at = typeof last === "number" ? last : Date.parse(last);
+  return !Number.isFinite(at) || now - at >= quietMs;
 }
 
 /**
@@ -148,11 +167,20 @@ export function useRunSummary(
   const { bySession } = useStore(summaryStore);
   const exchange = useMemo(() => lastExchange(entries), [entries]);
   const at = exchange?.at;
+  // A timer, so a session that goes quiet while this page is open is summarised
+  // without waiting for another event.
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (enabled && exchange && at) ensureSummary(sessionId, at, exchange.user, exchange.assistant);
-    // `at` identifies the run; the exchange text cannot change without it changing.
+    const timer = setInterval(() => setTick((value) => value + 1), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!enabled || !exchange || !at) return;
+    if (!isSettled(entries)) return;
+    ensureSummary(sessionId, at, exchange.user, exchange.assistant);
+    // `at` identifies the run; `tick` re-checks the quiet period as time passes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, sessionId, at]);
+  }, [enabled, sessionId, at, tick]);
   const history = bySession[sessionId] ?? [];
   const current = history.find((entry) => entry.at === exchange?.at);
   return {

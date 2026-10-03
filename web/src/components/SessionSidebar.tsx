@@ -12,7 +12,7 @@ import { RenameInput } from "./ui/RenameInput";
 import { Avatar } from "./Avatar";
 import { SpawnDialog, type SpawnCapabilityInfo } from "./SpawnDialog";
 import { useStore } from "../lib/store";
-import { ensureSummary, lastExchange, summaryStore } from "../lib/summaries";
+import { ensureSummary, isSettled, lastExchange, summaryStore } from "../lib/summaries";
 
 const COLLAPSE_KEY = "pinet.collapsedHosts";
 
@@ -146,8 +146,12 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
   useEffect(() => {
     if (!summariesEnabled) return;
     for (const session of sessions) {
-      const exchange = lastExchange(connection.store(session.sessionId).get().entries as never);
-      if (exchange) ensureSummary(session.sessionId, exchange.at, exchange.user, exchange.assistant);
+      const entries = connection.store(session.sessionId).get().entries;
+      const exchange = lastExchange(entries as never);
+      // Same quiet period as the board: one line per finished stretch, not per turn.
+      if (exchange && isSettled(entries as never)) {
+        ensureSummary(session.sessionId, exchange.at, exchange.user, exchange.assistant);
+      }
     }
   }, [summariesEnabled, connection, sessions, bySession]);
 
