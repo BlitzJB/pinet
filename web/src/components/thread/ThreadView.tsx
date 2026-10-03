@@ -10,6 +10,7 @@ import { ghostButton } from "../ui/surfaces";
 import { groupEntries, MessageGroup } from "./Message";
 import { Composer } from "./Composer";
 import type { CommandInfo } from "../../lib/mentions";
+import { uploadAttachment as uploadAttachmentFile } from "../../lib/attachments";
 import { ConnectionState } from "./ConnectionState";
 import { RunIndicator } from "./RunIndicator";
 
@@ -98,6 +99,12 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
     };
   }, [connection, sessionId, attached]);
   const loadFiles = useCallback((prefix: string) => connection.files(sessionId, prefix), [connection, sessionId]);
+  // Wrapped so the composer sees a stable function: an inline arrow would change
+  // identity every render and restart its upload effects.
+  const uploadAttachment = useCallback(
+    (file: File, onProgress: (fraction: number) => void) => uploadAttachmentFile(connection, sessionId, file, onProgress),
+    [connection, sessionId],
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [atTop, setAtTop] = useState(false);
@@ -287,6 +294,7 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
           <ConnectionState status={conn.status} error={conn.error} />
           <Composer
             commands={commands}
+            uploadAttachment={uploadAttachment}
             loadFiles={loadFiles}
             busy={running}
             disabled={!state.attached}
@@ -298,7 +306,7 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
             compacting={Boolean(state.status?.compacting)}
             onModel={(provider, modelId, name) => void connection.setModel(sessionId, provider, modelId, name).catch(() => {})}
             loadModels={(options) => connection.listModels(sessionId, options)}
-            onSend={(text) => connection.prompt(sessionId, text)}
+            onSend={(text, attachments) => connection.prompt(sessionId, text, attachments)}
             onStop={() => void connection.abort(sessionId).catch(() => {})}
             onCompact={() => void connection.compact(sessionId).catch(() => {})}
             onThinking={(level) => void connection.setThinking(sessionId, level).catch(() => {})}

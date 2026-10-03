@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUpIcon, BrainIcon, ChevronDownIcon, LoaderIcon, MicIcon, Minimize2Icon, SquareIcon, Undo2Icon } from "lucide-react";
+import { ArrowUpIcon, FileIcon, PaperclipIcon, XIcon, BrainIcon, ChevronDownIcon, LoaderIcon, MicIcon, Minimize2Icon, SquareIcon, Undo2Icon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { ModelInfo } from "../../lib/pinet";
 import { appendPeaks, startVoiceRecorder, MicError, type VoiceRecorder } from "../../lib/voice";
+import { checkFile, type AttachmentRef, type PendingAttachment } from "../../lib/attachments";
 import { activeToken, commandAtStart, commandItems, fileItems, replaceToken, shouldShowSheet, tuiOnlyNotice, type CommandInfo, type MenuItem, type Token } from "../../lib/mentions";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -32,6 +33,7 @@ export function Composer({
   onVoiceTake,
   commands,
   loadFiles,
+  uploadAttachment,
 }: {
   busy: boolean;
   disabled: boolean;
@@ -45,7 +47,7 @@ export function Composer({
   voiceEnabled?: boolean;
   onModel?: (provider: string, modelId: string, name: string) => void;
   loadModels?: (options?: { refresh?: boolean }) => Promise<ModelInfo[]>;
-  onSend: (text: string) => void | Promise<void>;
+  onSend: (text: string, attachments?: AttachmentRef[]) => void | Promise<void>;
   onStop: () => void;
   onCompact: () => void;
   onThinking: (level: string) => void;
@@ -55,6 +57,8 @@ export function Composer({
   commands?: CommandInfo[];
   /** Paths under the session directory, for `@` completion. */
   loadFiles?: (prefix: string) => Promise<string[]>;
+  /** Send one file; resolves once the host has it. */
+  uploadAttachment?: (file: File, onProgress: (fraction: number) => void) => Promise<AttachmentRef>;
 }) {
   const [text, setText] = useState("");
   const [thinkingOpen, setThinkingOpen] = useState(false);
@@ -68,6 +72,9 @@ export function Composer({
   // sinks, so the exit can animate before it leaves the tree.
   const [visible, setVisible] = useState(false);
   const [fileMatches, setFileMatches] = useState<string[]>([]);
+  const [pending, setPending] = useState<PendingAttachment[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Files arrive asynchronously, so "empty" and "still looking" have to be told
   // apart — conflating them is what made the sheet flicker.
   const [filesLoading, setFilesLoading] = useState(false);
@@ -96,9 +103,12 @@ export function Composer({
     }
     showSheet(false);
     const value = text.trim();
-    if (!value || disabled) return;
+    const attachments = pending.filter((item) => item.status === "ready").map(({ id, name, mime, size, kind }) => ({ id, name, mime, size, kind }));
+    // An image with no words is a legitimate message.
+    if ((!value && attachments.length === 0) || disabled) return;
     setText("");
-    void onSend(value);
+    setPending((current) => current.filter((item) => item.status !== "ready"));
+    void onSend(value, attachments);
   }
 
   // -- dictation ------------------------------------------------------------
@@ -330,11 +340,52 @@ export function Composer({
     });
   }
 
+  // -- attachments ------------------------------------------------------------
+
+  const ready = pending.filter((item) => item.status === "ready");
+
+  /** Read and send each file, tracking it so the composer can show progress. */
+  function addFiles(files: File[]) {
+    if (!uploadAttachment) return;
+    const room = Math.max(0, 4 - pending.length);
+    for (const file of files.slice(0, room)) {
+      const problem = checkFile(file);
+      const entry: PendingAttachment = {
+        id: `local-${file.name}-${file.size}-${pending.length}-${Math.random().toString(36).slice(2, 7)}`,
+        name: file.name,
+        mime: file.type || "application/octet-stream",
+        size: file.size,
+        kind: /^image\//.test(file.type) ? "image" : "text",
+        status: problem ? "error" : "uploading",
+        progress: 0,
+        error: problem,
+      };
+      if (problem) {
+        setPending((current) => [...current, entry]);
+        continue;
+      }
+      const local = entry.id;
+      setPending((current) => [...current, entry]);
+      void uploadAttachment(file, (fraction) =>
+        setPending((current) => current.map((item) => (item.id === local ? { ...item, progress: fraction } : item))),
+      )
+        .then((attachment) =>
+          setPending((current) => current.map((item) => (item.id === local ? { ...attachment, id: attachment.id, status: "ready", progress: 1 } : item))),
+        )
+        .catch((error: unknown) =>
+          setPending((current) =>
+            current.map((item) => (item.id === local ? { ...item, status: "error", error: error instanceof Error ? error.message : "upload failed" } : item)),
+          ),
+        );
+    }
+  }
+
   const hasText = text.trim().length > 0;
+  const canSend = hasText || ready.length > 0;
   // While a run is in flight the button only becomes "stop" when there is
   // nothing to send; with text it stays a send button so a steering message can
   // still go out mid-run.
-  const stopping = busy && !hasText;
+  const stopping = busy && !canSend;
 
   return (
     <div className="relative w-full">
@@ -406,10 +457,93 @@ export function Composer({
         </div>
       )}
       <div className={cn(paper, "relative z-10 flex w-full flex-col gap-1 rounded-[24px] p-2.5 shadow-lg shadow-black/5 transition-colors")}>
+      {/* Attaching lives above the input: a paperclip, and whatever is on its way. */}
+      {uploadAttachment && (
+        <div
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragging(false);
+            addFiles([...event.dataTransfer.files]);
+          }}
+          className={cn(
+            "flex flex-wrap items-center gap-1.5 px-1 pt-0.5",
+            dragging && "rounded-lg bg-foreground/[0.04] ring-1 ring-ring/30",
+          )}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              addFiles([...(event.target.files ?? [])]);
+              event.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Attach files"
+            className={cn(ghostButton, "size-7 shrink-0 rounded-lg p-0 text-muted-foreground/60 hover:text-foreground")}
+          >
+            <PaperclipIcon className="size-3.5" />
+          </button>
+
+          {pending.map((item) => (
+            <span
+              key={item.id}
+              className={cn(
+                "group/chip relative flex max-w-[13rem] items-center gap-1.5 overflow-hidden rounded-lg border px-1.5 py-1 text-[11px]",
+                item.status === "error" ? "border-destructive/40 text-destructive" : "border-border/60 text-foreground/70",
+              )}
+            >
+              {item.preview ? (
+                <img src={item.preview} alt="" className="size-5 shrink-0 rounded object-cover" />
+              ) : (
+                <FileIcon className="size-3.5 shrink-0 text-foreground/40" />
+              )}
+              <span className="min-w-0 truncate">{item.name}</span>
+              {item.status === "uploading" && <LoaderIcon className="size-3 shrink-0 animate-spin text-foreground/40 motion-reduce:animate-none" />}
+              {item.status === "error" && (
+                <span className="shrink-0" title={item.error}>
+                  !
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setPending((current) => current.filter((other) => other.id !== item.id))}
+                aria-label={`Remove ${item.name}`}
+                className="shrink-0 rounded p-0.5 text-foreground/35 transition-colors hover:text-foreground"
+              >
+                <XIcon className="size-3" />
+              </button>
+              {item.status === "uploading" && (
+                <span
+                  aria-hidden
+                  style={{ width: `${Math.round(item.progress * 100)}%` }}
+                  className="absolute inset-x-0 bottom-0 h-0.5 bg-foreground/25 transition-[width] duration-150"
+                />
+              )}
+            </span>
+          ))}
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={text}
         disabled={disabled}
+        onPaste={(event) => {
+          const files = [...(event.clipboardData?.files ?? [])];
+          if (files.length > 0 && uploadAttachment) {
+            event.preventDefault();
+            addFiles(files);
+          }
+        }}
         onChange={(event) => {
           setText(event.target.value);
           syncMenu(event.target.value);

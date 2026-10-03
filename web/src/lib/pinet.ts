@@ -288,6 +288,21 @@ export class PiNetConnection {
     this.store(sessionId).set({ attached: false, syncing: false });
   }
 
+  /** Reserve an id for an attachment about to be uploaded. */
+  async attachBegin(sessionId: string, info: { name: string; mime: string; size: number }) {
+    return this.controller?.command(sessionId, "attach.begin", info);
+  }
+
+  /** One slice of the file, base64, inside an ordinary sealed command. */
+  async attachChunk(sessionId: string, chunk: { id: string; index: number; data: string }) {
+    return this.controller?.command(sessionId, "attach.chunk", chunk);
+  }
+
+  /** Validate and keep. The host answers with the id, type and name it settled on. */
+  async attachEnd(sessionId: string, info: { id: string }) {
+    return this.controller?.command(sessionId, "attach.end", info);
+  }
+
   /** What the composer can offer: built-ins, prompt templates, skills, extensions. */
   async commands(sessionId: string): Promise<CommandInfo[]> {
     if (!this.controller) throw new Error("not connected");
@@ -303,7 +318,7 @@ export class PiNetConnection {
   }
 
   /** Optimistically echo the user's message, then send it and track delivery. */
-  async prompt(sessionId: string, text: string): Promise<void> {
+  async prompt(sessionId: string, text: string, attachments?: { id: string }[]): Promise<void> {
     if (!this.controller) throw new Error("not connected");
     const store = this.store(sessionId);
     store.set((state) => ({
@@ -312,7 +327,11 @@ export class PiNetConnection {
       outbox: { status: "sending", at: Date.now(), entriesAt: state.entries.length + 1, sawRun: false },
     }));
     try {
-      const ack = (await this.controller.command(sessionId, "prompt", { text })) as
+      const ack = (await this.controller.command(sessionId, "prompt", {
+        text,
+        // Only the ids travel: the host owns the bytes, and it decided what they are.
+        ...(attachments?.length ? { attachments } : {}),
+      })) as
         | { accepted?: boolean; mode?: string; error?: string; data?: { notice?: string } | null }
         | undefined;
       if (ack && ack.accepted === false) {

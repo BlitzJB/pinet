@@ -25,6 +25,12 @@ import { SessionSpawner, detectGit, detectTmux } from "../src/host/spawner.mjs";
 import { HISTORY_PAGE_SIZE, INITIAL_ENTRY_LIMIT, historyWindow } from "../src/host/history.mjs";
 import { DEFAULT_POLICIES, VoicePipeline, VoiceSpool, createCleaner, createTranscriber, resolveApiKey } from "../src/host/voice.mjs";
 import { commandCatalogue, filterPaths, resolveCommand, tuiOnlyNotice, walkFiles } from "../src/host/commands.mjs";
+import {
+  buildContentParts,
+  createAttachmentStore,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_TOTAL_BYTES,
+} from "../src/host/attachments.mjs";
 
 /** How long a directory listing is reused before it is walked again. */
 const FILES_CACHE_MS = 5_000;
@@ -396,6 +402,10 @@ export default function pinet(pi: Pi): void {
     }
   }
 
+  // Attachments this machine has been sent. Metadata is stripped and the file name is
+  // generated on the way in, so nothing here is shaped by a client.
+  const attachmentStore = createAttachmentStore();
+
   // -- commands from controllers --------------------------------------------
 
   async function handleCommand({ op, args }: { op: string; args: Json }): Promise<{ accepted: boolean; mode: string | null; error?: string | null; data?: Json | null }> {
@@ -404,7 +414,10 @@ export default function pinet(pi: Pi): void {
     switch (op) {
       case "prompt": {
         const text = String(args.text ?? "");
-        if (!text) return { accepted: false, mode: null, error: "empty_prompt" };
+        const attachedIds = Array.isArray(args.attachments) ? (args.attachments as { id?: string }[]) : [];
+        // An image with no words is a legitimate message, so text is only required
+        // when there is nothing attached.
+        if (!text && attachedIds.length === 0) return { accepted: false, mode: null, error: "empty_prompt" };
         // A message starting with a slash is resolved here rather than in the client,
         // so every controller behaves the same way. Commands pi expands itself pass
         // through untouched; the ones with a session API become that op; the
@@ -422,7 +435,28 @@ export default function pinet(pi: Pi): void {
         }
         const { deliverAs, mode } = resolveDelivery({ isIdle: ctx.isIdle(), requested: typeof args.deliverAs === "string" ? args.deliverAs : undefined });
         const images = Array.isArray(args.images) ? (args.images as never[]) : undefined;
-        const content = images ? ([{ type: "text", text }, ...images] as never) : text;
+        let content: unknown = images ? ([{ type: "text", text }, ...images] as never) : text;
+        if (attachedIds.length > 0) {
+          if (attachedIds.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+            return { accepted: false, mode: null, error: "too_many_attachments" };
+          }
+          const resolved = attachedIds
+            .map((entry) => attachmentStore.read(entry?.id))
+            .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+          if (resolved.length !== attachedIds.length) return { accepted: false, mode: null, error: "attachment_not_found" };
+          const total = resolved.reduce((sum, entry) => sum + entry.size, 0);
+          if (total > MAX_ATTACHMENT_TOTAL_BYTES) return { accepted: false, mode: null, error: "attachments_too_large" };
+          content = buildContentParts({
+            text,
+            attachments: resolved.map((entry) => ({
+              name: entry.name,
+              mime: entry.mime,
+              kind: entry.kind,
+              data: entry.data,
+              text: entry.kind === "text" ? entry.bytes.toString("utf8") : "",
+            })),
+          }) as never;
+        }
         if (deliverAs) pi.sendUserMessage(content, { deliverAs: deliverAs as never });
         else pi.sendUserMessage(content);
         return { accepted: true, mode };
@@ -487,6 +521,43 @@ export default function pinet(pi: Pi): void {
           data: {
             models,
             current: ctx.model ? { provider: String(ctx.model.provider), id: String(ctx.model.id) } : null,
+          },
+        };
+      }
+      case "attach.begin": {
+        const started = attachmentStore.begin({ name: args.name, mime: args.mime, size: args.size });
+        return started.error
+          ? { accepted: false, mode: null, error: started.error }
+          : { accepted: true, mode: null, data: started };
+      }
+      case "attach.chunk": {
+        // Base64 inside an ordinary sealed command: the security properties come from
+        // the command envelope, and the chunk size keeps it under the hub's frame cap.
+        const result = attachmentStore.chunk({ id: args.id, index: args.index, data: args.data });
+        return result.error ? { accepted: false, mode: null, error: result.error } : { accepted: true, mode: null, data: { received: result.received } };
+      }
+      case "attach.end": {
+        const record = attachmentStore.end({ id: args.id });
+        if (record.error) return { accepted: false, mode: null, error: record.error };
+        return {
+          accepted: true,
+          mode: null,
+          data: { attachment: { id: record.id, name: record.name, mime: record.mime, size: record.size, kind: record.kind } },
+        };
+      }
+      case "attachments.list":
+        return { accepted: true, mode: null, data: { attachments: attachmentStore.list() } };
+      case "attachment.get": {
+        // For a controller that did not send it: another device, or this one after a
+        // reload. The bytes go back encrypted like everything else.
+        const found = attachmentStore.read(args.id);
+        if (!found) return { accepted: false, mode: null, error: "not_found" };
+        return {
+          accepted: true,
+          mode: null,
+          data: {
+            attachment: { id: found.id, name: found.name, mime: found.mime, size: found.size, kind: found.kind },
+            data: found.data,
           },
         };
       }
