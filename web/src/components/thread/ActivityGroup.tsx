@@ -5,6 +5,7 @@ import { describeTool, summarizeTools, type ToolKind } from "../../lib/tools";
 import type { ActivityItem } from "../../lib/segments";
 import { CollapsibleContent } from "../ui/collapsible";
 import { mono, ShimmerLabel } from "../ui/surfaces";
+import { Reasoning } from "./Reasoning";
 import { TOOL_ICONS, ToolCard } from "./ToolCard";
 
 export const ActivityGroup = memo(function ActivityGroup({ items, running }: { items: ActivityItem[]; running: boolean }) {
@@ -25,7 +26,19 @@ export const ActivityGroup = memo(function ActivityGroup({ items, running }: { i
   }, [failed]);
 
   const kinds = [...new Set(views.map((view) => view.kind))].slice(0, 3);
-  const header = running ? (runningTool ? `Running ${runningTool.name}…` : "Thinking…") : summary;
+
+  // What the thinking cost, surfaced in the trigger so a collapsed group still says
+  // it — the price is the part worth seeing without opening anything.
+  const thoughts = items.filter((item): item is Extract<ActivityItem, { type: "reasoning" }> => item.type === "reasoning");
+  const thoughtMs = thoughts.reduce((sum, item) => sum + (item.durationMs ?? 0), 0);
+  const thoughtTokens = thoughts.reduce((sum, item) => sum + (item.tokens ?? 0), 0);
+  const thought = thoughtMs > 0 ? `Thought for ${formatDuration(thoughtMs)}` : thoughts.length > 0 ? "Thought" : undefined;
+  const tokenLabel = thoughtTokens > 0 ? `${thoughtTokens} tokens` : undefined;
+  const header = running
+    ? runningTool
+      ? `Running ${runningTool.name}…`
+      : "Thinking…"
+    : [thought, tokenLabel, summary].filter(Boolean).join(" · ");
 
   return (
     <div
@@ -64,9 +77,8 @@ export const ActivityGroup = memo(function ActivityGroup({ items, running }: { i
                 <div
                   key={index}
                   style={{ animation: "pinet-item-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both", animationDelay: `${Math.min(index, 8) * 18}ms` }}
-                  className="max-h-72 overflow-y-auto border-l-2 border-border pl-3 text-[13px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground italic"
                 >
-                  {item.text}
+                  <Reasoning text={item.text} durationMs={item.durationMs} tokens={item.tokens} active={running && !runningTool} flat />
                 </div>
               ) : (
                 <div key={index} style={{ animation: "pinet-item-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both", animationDelay: `${Math.min(index, 8) * 18}ms` }}>

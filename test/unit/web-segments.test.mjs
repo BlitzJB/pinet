@@ -50,3 +50,24 @@ describe("summarizeActivity", () => {
     expect(summarizeActivity([{ type: "tool", name: "a", durationMs: 400 }, { type: "tool", name: "b", durationMs: 1100 }]).totalMs).toBe(1500);
   });
 });
+
+describe("what the thinking cost", () => {
+  it("measures the time to the next entry and the tokens the turn added", async () => {
+    const { segmentAssistantTurn } = await import("../../web/src/lib/segments.ts");
+    const segments = segmentAssistantTurn([
+      { kind: "user", text: "do the thing", timestamp: 0, tokensBefore: 100 },
+      { kind: "assistant", reasoning: "weighing the options", timestamp: 1000, tokensBefore: 500 },
+      { kind: "assistant", text: "here is the answer", timestamp: 9000, tokensBefore: 900 },
+    ]);
+    const reasoning = segments[0].items.find((item) => item.type === "reasoning");
+    expect(reasoning).toMatchObject({ type: "reasoning", durationMs: 8000, tokens: 400 });
+  });
+
+  it("leaves the numbers out rather than inventing them", async () => {
+    const { segmentAssistantTurn } = await import("../../web/src/lib/segments.ts");
+    const segments = segmentAssistantTurn([{ kind: "assistant", reasoning: "only a thought", timestamp: 1000 }]);
+    const reasoning = segments[0].items.find((item) => item.type === "reasoning");
+    expect(reasoning?.durationMs).toBeUndefined();
+    expect(reasoning?.tokens).toBeUndefined();
+  });
+});

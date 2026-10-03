@@ -3,6 +3,10 @@ import type { DisplayEntry } from "./pinet";
 export interface ReasoningItem {
   type: "reasoning";
   text: string;
+  /** How long the model spent thinking before the next thing happened. */
+  durationMs?: number;
+  /** Tokens the turn added, from the context size recorded on each entry. */
+  tokens?: number;
 }
 
 export interface ToolItem {
@@ -29,6 +33,23 @@ export function segmentAssistantTurn(entries: DisplayEntry[]): Segment[] {
   for (const entry of entries) {
     if (entry.kind === "tool" && entry.toolCallId) results.set(entry.toolCallId, entry);
   }
+  // What the thinking cost: the time until the next thing happened, and the growth
+  // in recorded context size across the turn. Both come from the entries themselves,
+  // so nothing has to be plumbed through the protocol.
+  const reasoningStats = new Map<DisplayEntry, { durationMs?: number; tokens?: number }>();
+  entries.forEach((entry, index) => {
+    if (!entry.reasoning?.trim()) return;
+    const next = entries[index + 1];
+    const durationMs =
+      entry.timestamp !== undefined && next?.timestamp !== undefined && next.timestamp > entry.timestamp
+        ? next.timestamp - entry.timestamp
+        : undefined;
+    const before = entry.tokensBefore;
+    const previous = entries[index - 1]?.tokensBefore;
+    const tokens = typeof before === "number" && typeof previous === "number" && before > previous ? before - previous : undefined;
+    reasoningStats.set(entry, { durationMs, tokens });
+  });
+
   const consumed = new Set<string>();
   const segments: Segment[] = [];
   let activity: ActivityItem[] = [];
@@ -41,7 +62,7 @@ export function segmentAssistantTurn(entries: DisplayEntry[]): Segment[] {
 
   for (const entry of entries) {
     if (entry.kind === "assistant") {
-      if (entry.reasoning?.trim()) activity.push({ type: "reasoning", text: entry.reasoning });
+      if (entry.reasoning?.trim()) activity.push({ type: "reasoning", text: entry.reasoning, ...reasoningStats.get(entry) });
       if (entry.text?.trim()) {
         flush();
         segments.push({ kind: "text", text: entry.text });
