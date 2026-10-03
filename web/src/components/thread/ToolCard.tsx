@@ -118,7 +118,10 @@ export const ToolCard = memo(function ToolCard({ name, args, output, error, runn
           type="button"
           onClick={() => hasBody && setOpen((value) => !value)}
           aria-expanded={hasBody ? open : undefined}
-          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/40 rounded-lg"
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-2 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/40 rounded-lg",
+            flat ? "px-1" : "px-3",
+          )}
         >
           <span className="relative flex size-3.5 shrink-0 items-center justify-center">
             {status === "running" ? (
@@ -163,7 +166,8 @@ export const ToolCard = memo(function ToolCard({ name, args, output, error, runn
             aria-label={copied ? "Copied" : "Copy output"}
             className={cn(
               ghostButton,
-              "mr-2 size-6 shrink-0 rounded-md p-0 opacity-0 transition-opacity group-hover/tool:opacity-100 focus-visible:opacity-100",
+              "size-6 shrink-0 rounded-md p-0 opacity-0 transition-opacity group-hover/tool:opacity-100 focus-visible:opacity-100",
+              flat ? "mr-0" : "mr-2",
             )}
           >
             {copied ? <CheckIcon className="size-3 text-emerald-500" /> : <CopyIcon className="size-3" />}
@@ -173,7 +177,7 @@ export const ToolCard = memo(function ToolCard({ name, args, output, error, runn
 
       {hasBody && (
         <CollapsibleContent open={open}>
-          <div className="px-3 pb-3">
+          <div className={flat ? "px-1 pb-3" : "px-3 pb-3"}>
             {view.diff?.length ? <DiffView lines={view.diff} /> : null}
             {shown.text.trim() && (
               <>
