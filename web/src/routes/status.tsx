@@ -6,7 +6,7 @@ import { useConnectionState, usePiNet, useSessionState } from "../lib/context";
 import { getMe } from "../lib/api";
 import { groupSessionsByHost } from "../lib/session-groups";
 import { deriveRunFeedback } from "../lib/run-state";
-import { useRunSummary } from "../lib/summaries";
+import { parseSummary, useRunSummary, type SummaryLabel } from "../lib/summaries";
 import { RunIndicator } from "../components/thread/RunIndicator";
 import { cn } from "../lib/utils";
 
@@ -135,10 +135,28 @@ export function StatusPage() {
   );
 }
 
+/** The label carries the answer to "does this need me?", so it is the loud part. */
+function LabelChip({ label }: { label: SummaryLabel }) {
+  const tone =
+    label === "Waiting"
+      ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+      : label === "Blocked"
+        ? "bg-red-500/15 text-red-600 dark:text-red-400"
+        : label === "Done"
+          ? "bg-emerald-500/12 text-emerald-600 dark:text-emerald-400"
+          : "bg-foreground/[0.06] text-muted-foreground";
+  return <span className={cn("mt-[2px] shrink-0 rounded px-1 py-[1px] text-[9.5px] font-medium uppercase tracking-wide", tone)}>{label}</span>;
+}
+
 function SessionCard({ sessionId, name, cwd, summaries }: { sessionId: string; name: string; cwd: string; host: string; summaries: boolean }) {
   const connection = usePiNet();
   const state = useSessionState(sessionId);
-  const summary = useRunSummary(sessionId, state.entries, summaries && !(state.status?.phase === "running" || state.status?.isIdle === false));
+  const { text: summary, previous } = useRunSummary(
+    sessionId,
+    state.entries,
+    summaries && !(state.status?.phase === "running" || state.status?.isIdle === false),
+  );
+  const parsed = parseSummary(summary);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -175,10 +193,27 @@ function SessionCard({ sessionId, name, cwd, summaries }: { sessionId: string; n
       <div className="mt-2 min-h-5">
         {feedback ? (
           <RunIndicator feedback={feedback} />
+        ) : summary ? (
+          <div className="space-y-1">
+            <div className="flex items-start gap-1.5">
+              {parsed.label && <LabelChip label={parsed.label} />}
+              <span className="line-clamp-3 whitespace-pre-line text-[12px] text-muted-foreground/70" title={summary}>
+                {parsed.body.join("\n")}
+              </span>
+            </div>
+            {previous.length > 0 && (
+              <div className="border-t border-border/40 pt-1">
+                <p className="text-[9.5px] uppercase tracking-wide text-muted-foreground/40">Previously</p>
+                {previous.slice(0, 2).map((line, index) => (
+                  <p key={index} className="line-clamp-1 text-[11px] text-muted-foreground/45" title={line}>
+                    {parseSummary(line).body.join(" ")}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
         ) : (
-          <span className="line-clamp-2 text-[12px] text-muted-foreground/60" title={summary ?? undefined}>
-            {summary ?? model?.name ?? "idle"}
-          </span>
+          <span className="text-[12px] text-muted-foreground/45">{model?.name ?? "idle"}</span>
         )}
       </div>
 

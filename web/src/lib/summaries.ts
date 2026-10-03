@@ -11,7 +11,8 @@ import { Store, useStore } from "./store";
  * clear so it can track names and directories — is deliberately not where this
  * goes. The hub sees the last exchange once, when the line is generated.
  */
-const STORAGE_KEY = "pinet.runSummaries";
+const STORAGE_KEY = "pinet.runSummaries.v2";
+const HISTORY = 5;
 
 export interface RunSummary {
   /** The final assistant entry id this line describes. */
@@ -19,16 +20,50 @@ export interface RunSummary {
   text: string;
 }
 
-function load(): Record<string, RunSummary> {
+function load(): Record<string, RunSummary[]> {
   try {
-    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, RunSummary>;
-    return raw && typeof raw === "object" ? raw : {};
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, RunSummary[]>;
+    if (!raw || typeof raw !== "object") return {};
+    // Tolerate the single-entry shape from the first version.
+    for (const [id, value] of Object.entries(raw)) {
+      if (!Array.isArray(value)) {
+        const legacy = value as unknown as RunSummary;
+        raw[id] = legacy?.text ? [legacy] : [];
+      }
+    }
+    return raw;
   } catch {
     return {};
   }
 }
 
-export const summaryStore = new Store<{ bySession: Record<string, RunSummary> }>({ bySession: load() });
+export const summaryStore = new Store<{ bySession: Record<string, RunSummary[]> }>({ bySession: load() });
+
+/** Newest first, one entry per run, capped. Pure so the ordering is testable. */
+export function pushSummary(list: RunSummary[] | undefined, entry: RunSummary, max = HISTORY): RunSummary[] {
+  const without = (list ?? []).filter((existing) => existing.at !== entry.at);
+  return [entry, ...without].slice(0, max);
+}
+
+const LABELS = ["Done", "Answered", "Waiting", "Blocked", "No changes"] as const;
+export type SummaryLabel = (typeof LABELS)[number];
+
+/**
+ * Split the leading label off a summary, so the list can show whether the session
+ * needs you at a glance. Anything unrecognised is left as body text.
+ */
+export function parseSummary(text: string | undefined): { label?: SummaryLabel; body: string[] } {
+  const lines = String(text ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return { body: [] };
+  const match = /^(Done|Answered|Waiting|Blocked|No changes)\s*(?:—|–|-|:)\s*(.*)$/i.exec(lines[0]);
+  if (!match) return { body: lines };
+  const label = LABELS.find((candidate) => candidate.toLowerCase() === match[1].toLowerCase());
+  const rest = [match[2], ...lines.slice(1)].filter(Boolean);
+  return { label, body: rest.length ? rest : [lines[0]] };
+}
 
 summaryStore.subscribe(() => {
   try {
@@ -42,13 +77,13 @@ const inflight = new Set<string>();
 
 /** Generate once per run. Safe to call on every render. */
 export function ensureSummary(sessionId: string, at: string, user: string, assistant: string): void {
-  if (summaryStore.get().bySession[sessionId]?.at === at) return;
+  if (summaryStore.get().bySession[sessionId]?.some((entry) => entry.at === at)) return;
   if (inflight.has(sessionId)) return;
   inflight.add(sessionId);
   void summarizeExchange(user, assistant)
     .then(({ summary }) => {
       if (!summary) return;
-      summaryStore.set((state) => ({ bySession: { ...state.bySession, [sessionId]: { at, text: summary } } }));
+      summaryStore.set((state) => ({ bySession: { ...state.bySession, [sessionId]: pushSummary(state.bySession[sessionId], { at, text: summary }) } }));
     })
     .catch(() => {
       /* the list just keeps showing the session's name */
@@ -90,8 +125,12 @@ export function lastExchange(entries: SummaryEntry[]): { at: string; user: strin
   return { at: assistant.id, user, assistant: assistant.text };
 }
 
-/** The cached line for a session's current run, generating it if needed. */
-export function useRunSummary(sessionId: string, entries: SummaryEntry[], enabled: boolean): string | undefined {
+/** The line for a session's current run (generating it if needed) and the ones before it. */
+export function useRunSummary(
+  sessionId: string,
+  entries: SummaryEntry[],
+  enabled: boolean,
+): { text?: string; previous: string[] } {
   const { bySession } = useStore(summaryStore);
   const exchange = useMemo(() => lastExchange(entries), [entries]);
   const at = exchange?.at;
@@ -100,6 +139,11 @@ export function useRunSummary(sessionId: string, entries: SummaryEntry[], enable
     // `at` identifies the run; the exchange text cannot change without it changing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, sessionId, at]);
-  const cached = bySession[sessionId];
-  return exchange && cached?.at === exchange.at ? cached.text : undefined;
+  const history = bySession[sessionId] ?? [];
+  const current = history.find((entry) => entry.at === exchange?.at);
+  return {
+    text: current?.text,
+    // Everything before the run on screen, newest first.
+    previous: history.filter((entry) => entry.at !== exchange?.at).map((entry) => entry.text),
+  };
 }

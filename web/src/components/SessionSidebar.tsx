@@ -296,9 +296,9 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                       <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
-                        {bySession[session.sessionId]?.text && (
-                          <span className="block truncate text-[11px] leading-tight text-muted-foreground/55" title={bySession[session.sessionId].text}>
-                            {bySession[session.sessionId].text}
+                        {bySession[session.sessionId]?.[0]?.text && (
+                          <span className="block truncate text-[11px] leading-tight text-muted-foreground/55" title={bySession[session.sessionId][0].text}>
+                            {bySession[session.sessionId][0].text}
                           </span>
                         )}
                       </span>
