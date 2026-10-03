@@ -171,7 +171,7 @@ function SessionCard({
   // when pi's agent settled, so there is nothing to wait for.
   const complete = isRunComplete({ running, settledAt: state.status?.settledAt, entries: state.entries });
   const { text: summary, previous } = useRunSummary(sessionId, state.entries, summaries && complete);
-  const { labels, body } = parseSummary(summary);
+  const { items } = parseSummary(summary);
   const context = state.status?.contextUsage;
   const model = state.status?.model;
 
@@ -196,8 +196,8 @@ function SessionCard({
 
   // Whether the summary is worth an expander. Approximate: measuring would mean
   // rendering it unclamped first.
-  // Roughly three lines at this width; measuring would mean rendering it unclamped.
-  const long = body.join(" ").length > 150;
+  // Roughly what fits before it is worth an expander.
+  const long = items.length > 1 || items.reduce((total, item) => total + item.text.length, 0) > 140;
 
   return (
     <div
@@ -279,25 +279,17 @@ function SessionCard({
             <RunIndicator feedback={feedback} />
           ) : summary ? (
             <>
-              {labels.length > 0 && (
-                <div className="mb-1 flex flex-wrap items-center gap-1">
-                  {labels.map((label) => (
-                    <LabelChip key={label} label={label} />
-                  ))}
-                </div>
-              )}
-              {/* One paragraph, so the browser wraps it: long identifiers and URLs
-                  must not push the card wider than the grid. Clamped by line count
-                  rather than height, so it cannot grow past three lines. */}
-              <div className="relative">
-                <p
-                  className={cn(
-                    "text-[12.5px] leading-snug text-muted-foreground/75 [overflow-wrap:anywhere]",
-                    !expanded && long && "line-clamp-3",
-                  )}
-                >
-                  {body.join(" ")}
-                </p>
+              {/* Each label is its own badge, with its text underneath — the shape
+                  the model is asked for, and what makes the state scannable. */}
+              <div className={cn("space-y-1.5", !expanded && long && "relative max-h-[5.5rem] overflow-hidden")}>
+                {items.map((item, index) => (
+                  <div key={index} className="space-y-0.5">
+                    {item.label && <LabelChip label={item.label} />}
+                    {item.text && (
+                      <p className="text-[12.5px] leading-snug text-muted-foreground/75 [overflow-wrap:anywhere]">{item.text}</p>
+                    )}
+                  </div>
+                ))}
                 {!expanded && long && (
                   <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-background to-transparent" />
                 )}
@@ -318,7 +310,7 @@ function SessionCard({
                   <p className="text-[9.5px] uppercase tracking-wide text-muted-foreground/40">Previously</p>
                   {previous.slice(0, 2).map((line, index) => (
                     <p key={index} className="line-clamp-1 text-[11px] text-muted-foreground/45 [overflow-wrap:anywhere]" title={line}>
-                      {parseSummary(line).body.join(" ")}
+                      {parseSummary(line).items.map((item) => item.text).join(" ")}
                     </p>
                   ))}
                 </div>

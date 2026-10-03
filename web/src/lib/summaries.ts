@@ -57,35 +57,50 @@ export function pushSummary(list: RunSummary[] | undefined, entry: RunSummary, m
 const LABELS = ["Done", "Answered", "Waiting", "Blocked", "No changes"] as const;
 export type SummaryLabel = (typeof LABELS)[number];
 
+export interface SummaryItem {
+  label?: SummaryLabel;
+  text: string;
+}
+
+const LABEL_AT_START = /^(Done|Answered|Waiting|Blocked|No changes)\b[\s:—–-]*/i;
+/** A label that opens a new sentence inside a line, which is how models write them. */
+const LABEL_AT_SENTENCE = /(?<=[.!?])\s+(?=(?:Done|Answered|Waiting|Blocked|No changes)\b)/i;
+
 /**
- * Split the leading labels off a summary, so the list can show whether the session
- * needs you before you read a word. Models sometimes return more than one
- * ("Waiting, Blocked — …"), which is useful: the most urgent is shown first.
+ * Split a summary into labelled pieces.
+ *
+ * Models write labels inconsistently — on their own line, at the start of the
+ * first line, or mid-line after a full stop ("… runs every 60s while active.
+ * Waiting — host restart in progress"). Each is treated as a new piece, so a label
+ * always becomes its own badge with the text that belongs to it underneath,
+ * instead of being buried in the prose.
  */
-export function parseSummary(text: string | undefined): { labels: SummaryLabel[]; body: string[] } {
+export function parseSummary(text: string | undefined): { items: SummaryItem[] } {
   const lines = String(text ?? "")
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  if (!lines.length) return { labels: [], body: [] };
+  const items: SummaryItem[] = [];
 
-  const labels: SummaryLabel[] = [];
-  let head = lines[0];
-  for (;;) {
-    // Separators may lead: "Waiting, Blocked — …" leaves a comma in front.
-    const candidate = head.replace(/^[\s,/&+\u2014-]+/, "");
-    const match = /^(Done|Answered|Waiting|Blocked|No changes)\b/i.exec(candidate);
-    if (!match) break;
-    const label = LABELS.find((entry) => entry.toLowerCase() === match[1].toLowerCase());
-    if (!label) break;
-    // A repeat is consumed rather than left in the body, but only shown once.
-    if (!labels.includes(label)) labels.push(label);
-    head = candidate.slice(match[0].length).replace(/^[\s,:\u2014-]+/, "").trim();
-    if (!head) break;
+  for (const line of lines) {
+    for (const segment of line.split(LABEL_AT_SENTENCE)) {
+      const piece = segment.trim();
+      if (!piece) continue;
+      const match = LABEL_AT_START.exec(piece);
+      const label = match ? LABELS.find((entry) => entry.toLowerCase() === match[1].toLowerCase()) : undefined;
+      const body = match ? piece.slice(match[0].length).trim() : piece;
+      if (label) {
+        items.push({ label, text: body });
+      } else if (items.length) {
+        // A line with no label belongs to the piece above it.
+        const previous = items[items.length - 1];
+        previous.text = `${previous.text} ${body}`.trim();
+      } else {
+        items.push({ text: body });
+      }
+    }
   }
-
-  const body = [head, ...lines.slice(1)].filter(Boolean);
-  return { labels, body: body.length ? body : [lines[0]] };
+  return { items };
 }
 
 summaryStore.subscribe(() => {

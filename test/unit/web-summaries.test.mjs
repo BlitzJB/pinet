@@ -78,27 +78,39 @@ describe("run summaries: history and labels", () => {
     expect(many).toHaveLength(5);
   });
 
-  it("splits the labels off, so the list can show whether it needs you", async () => {
+  it("gives each label its own piece, with the text that belongs to it", async () => {
     const { parseSummary } = await import("../../web/src/lib/summaries.ts");
     expect(parseSummary("Waiting — which provider should the summariser use?")).toEqual({
-      labels: ["Waiting"],
-      body: ["which provider should the summariser use?"],
+      items: [{ label: "Waiting", text: "which provider should the summariser use?" }],
     });
-    expect(parseSummary("Done — fixed the spawn scope check\nStill to do: the picker")).toEqual({
-      labels: ["Done"],
-      body: ["fixed the spawn scope check", "Still to do: the picker"],
+    // The shape the model actually produced in the report: a label on its own line,
+    // then content, then another label mid-sentence.
+    expect(
+      parseSummary("Done\nagent completion polling now runs every 60s while active. Waiting — host restart in progress"),
+    ).toEqual({
+      items: [
+        { label: "Done", text: "agent completion polling now runs every 60s while active." },
+        { label: "Waiting", text: "host restart in progress" },
+      ],
     });
-    expect(parseSummary("No changes - investigated the timeout")).toEqual({ labels: ["No changes"], body: ["investigated the timeout"] });
-    expect(parseSummary("Something else entirely")).toEqual({ labels: [], body: ["Something else entirely"] });
-    expect(parseSummary(undefined)).toEqual({ labels: [], body: [] });
+    // A line with no label continues the piece above it.
+    expect(parseSummary("Done\nfixed the picker\nand the scope check")).toEqual({
+      items: [{ label: "Done", text: "fixed the picker and the scope check" }],
+    });
+    expect(parseSummary("Something else entirely")).toEqual({ items: [{ text: "Something else entirely" }] });
+    expect(parseSummary(undefined)).toEqual({ items: [] });
   });
 
-  it("keeps more than one label when the model gives several", async () => {
+  it("keeps every label when the model gives several", async () => {
     const { parseSummary } = await import("../../web/src/lib/summaries.ts");
-    expect(parseSummary("Waiting, Blocked — needs a decision on the provider")).toEqual({
-      labels: ["Waiting", "Blocked"],
-      body: ["needs a decision on the provider"],
+    expect(parseSummary("Waiting\nneeds a decision\nBlocked\nthe image is missing")).toEqual({
+      items: [
+        { label: "Waiting", text: "needs a decision" },
+        { label: "Blocked", text: "the image is missing" },
+      ],
     });
+    expect(parseSummary("Answered — the fix is Done")).toEqual({ items: [{ label: "Answered", text: "the fix is Done" }] });
+  });
     expect(parseSummary("Done / Waiting — shipped it, wants a review")).toEqual({
       labels: ["Done", "Waiting"],
       body: ["shipped it, wants a review"],
