@@ -26,6 +26,9 @@ import { HISTORY_PAGE_SIZE, INITIAL_ENTRY_LIMIT, historyWindow } from "../src/ho
 import { DEFAULT_POLICIES, VoicePipeline, VoiceSpool, createCleaner, createTranscriber, resolveApiKey } from "../src/host/voice.mjs";
 import { commandCatalogue, filterPaths, resolveCommand, tuiOnlyNotice, walkFiles } from "../src/host/commands.mjs";
 
+/** How long a directory listing is reused before it is walked again. */
+const FILES_CACHE_MS = 5_000;
+
 type Json = Record<string, unknown>;
 type Pi = ExtensionAPI;
 
@@ -497,7 +500,7 @@ export default function pinet(pi: Pi): void {
         const cwd = ctx.sessionManager.getCwd();
         const prefix = typeof args.prefix === "string" ? args.prefix : "";
         const limit = Math.min(Math.max(1, Number(args.limit) || 40), 200);
-        return { accepted: true, mode: null, data: { files: filterPaths(walkFiles(cwd), prefix, limit), cwd } };
+        return { accepted: true, mode: null, data: { files: filterPaths(cachedWalk(cwd), prefix, limit), cwd } };
       }
       case "set_thinking":
         pi.setThinkingLevel(String(args.level ?? "off") as never);
@@ -533,6 +536,17 @@ export default function pinet(pi: Pi): void {
       default:
         return { accepted: false, mode: null, error: `unknown_op:${op}` };
     }
+  }
+
+  // Walking a tree on every keystroke is wasted work — the answer only changes when
+  // files do, and a few seconds of staleness is invisible in a completion list.
+  let filesCache: { cwd: string; at: number; files: string[] } | undefined;
+  function cachedWalk(cwd: string): string[] {
+    const now = Date.now();
+    if (!filesCache || filesCache.cwd !== cwd || now - filesCache.at > FILES_CACHE_MS) {
+      filesCache = { cwd, at: now, files: walkFiles(cwd) };
+    }
+    return filesCache.files;
   }
 
   /**
