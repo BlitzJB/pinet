@@ -305,3 +305,15 @@ body {
     transform: translateY(26px);
   }
 }
+
+/* Children of an activity group arrive in sequence rather than all at once. */
+@keyframes pinet-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
