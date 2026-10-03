@@ -3,7 +3,7 @@ import { ArrowUpIcon, BrainIcon, ChevronDownIcon, LoaderIcon, MicIcon, Minimize2
 import { cn } from "../../lib/utils";
 import type { ModelInfo } from "../../lib/pinet";
 import { appendPeaks, startVoiceRecorder, MicError, type VoiceRecorder } from "../../lib/voice";
-import { activeToken, commandAtStart, commandItems, fileItems, replaceToken, tuiOnlyNotice, type CommandInfo, type MenuItem, type Token } from "../../lib/mentions";
+import { activeToken, commandAtStart, commandItems, fileItems, replaceToken, shouldShowSheet, tuiOnlyNotice, type CommandInfo, type MenuItem, type Token } from "../../lib/mentions";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ghostButton, iconSwap, iconSwapIn, iconSwapOut, paper } from "../ui/surfaces";
@@ -68,6 +68,10 @@ export function Composer({
   // sinks, so the exit can animate before it leaves the tree.
   const [visible, setVisible] = useState(false);
   const [fileMatches, setFileMatches] = useState<string[]>([]);
+  // Files arrive asynchronously, so "empty" and "still looking" have to be told
+  // apart — conflating them is what made the sheet flicker.
+  const [filesLoading, setFilesLoading] = useState(false);
+  const fileRequest = useRef(0);
   const [retryTake, setRetryTake] = useState<string[] | null>(null);
   const takeRef = useRef<string[]>([]);
   const [insertion, setInsertion] = useState<{ start: number; end: number; at: number } | null>(null);
@@ -208,8 +212,10 @@ export function Composer({
 
   // -- `/` commands and `@` mentions -----------------------------------------
 
-  const items: MenuItem[] = menu?.token.kind === "mention" ? fileItems(fileMatches) : commandItems(commands ?? [], menu?.token.query ?? "");
-  const mounted = menu !== null && items.length > 0;
+  const mention = menu?.token.kind === "mention";
+  const items: MenuItem[] = mention ? fileItems(fileMatches) : commandItems(commands ?? [], menu?.token.query ?? "");
+  const loading = mention && filesLoading;
+  const mounted = menu !== null && shouldShowSheet(items.length, loading);
   // Only an open sheet takes keys; a sinking one must not swallow Enter.
   const menuOpen = mounted && visible;
   const active = menu ? Math.min(menu.index, Math.max(0, items.length - 1)) : 0;
@@ -243,16 +249,32 @@ export function Composer({
       showSheet(false);
       return;
     }
-    setMenu((current) => ({ token, index: current && current.token.kind === token.kind ? current.index : 0 }));
+    setMenu((current) => {
+      // Returning the same object lets React skip the render entirely: `syncMenu`
+      // fires on change *and* keyup, so this runs twice per keystroke.
+      if (
+        current &&
+        current.token.kind === token.kind &&
+        current.token.query === token.query &&
+        current.token.start === token.start &&
+        current.token.end === token.end
+      ) {
+        return current;
+      }
+      return { token, index: current && current.token.kind === token.kind ? current.index : 0 };
+    });
     showSheet(true);
   }
 
   // Nothing matched, so there is nothing to show: sink it rather than leaving an
   // empty box behind the composer.
   useEffect(() => {
-    if (menu && items.length === 0) showSheet(false);
+    if (menu && !loading && items.length === 0) showSheet(false);
+    // Keyed on the query rather than the menu object: `syncMenu` runs on both change
+    // and keyup, and a new object identity each time would re-run this and close the
+    // sheet it had just opened.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [menu, items.length]);
+  }, [menu?.token.kind, menu?.token.query, items.length, loading]);
 
   useEffect(() => () => window.clearTimeout(closeTimer.current), []);
 
@@ -266,14 +288,32 @@ export function Composer({
   useEffect(() => {
     if (menu?.token.kind !== "mention") {
       setFileMatches([]);
+      setFilesLoading(false);
       return;
     }
     const query = menu.token.query;
-    // The host owns the directory and does the ranking; debounced so typing does
-    // not fire a request per character.
-    const timer = setTimeout(() => {
-      void loadFilesRef.current?.(query).then(setFileMatches).catch(() => setFileMatches([]));
-    }, 120);
+    // A request per keystroke would land out of order and make the list jump, so
+    // only the newest one is allowed to write.
+    const id = (fileRequest.current += 1);
+    setFilesLoading(true);
+    // The bare `@` is the common case and the one the user is waiting on, so it
+    // goes out at once; typing after that is debounced.
+    const timer = setTimeout(
+      () => {
+        void loadFilesRef
+          .current?.(query)
+          .then((files) => {
+            if (id === fileRequest.current) setFileMatches(files);
+          })
+          .catch(() => {
+            if (id === fileRequest.current) setFileMatches([]);
+          })
+          .finally(() => {
+            if (id === fileRequest.current) setFilesLoading(false);
+          });
+      },
+      query ? 120 : 0,
+    );
     return () => clearTimeout(timer);
   }, [menu?.token.kind, menu?.token.query]);
 
@@ -330,6 +370,12 @@ export function Composer({
             </button>
           </div>
           <div ref={listRef} className="max-h-[168px] overflow-y-auto overscroll-contain pb-1">
+            {loading && items.length === 0 && (
+              <div className="flex items-center gap-2 px-3.5 py-[13px] text-[12px] text-muted-foreground/50">
+                <LoaderIcon className="size-3.5 animate-spin" />
+                Looking for files…
+              </div>
+            )}
             {items.map((item, index) => (
               <button
                 key={item.value}

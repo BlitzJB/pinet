@@ -6,6 +6,7 @@ import {
   fileItems,
   filterCommands,
   replaceToken,
+  shouldShowSheet,
 } from "../../web/src/lib/mentions.ts";
 
 describe("mentions: finding the token", () => {
@@ -89,5 +90,15 @@ describe("mentions: filtering commands", () => {
     expect(commandAtStart("/tree now", commands)?.source).toBe("tui");
     expect(commandAtStart("/compact keep the plan", commands)?.source).toBe("builtin");
     expect(commandAtStart("hello", commands)).toBeUndefined();
+  });
+});
+
+describe("mentions: whether the sheet is shown", () => {
+  it("stays up while the first results are still coming", () => {
+    // An empty list means "nothing matched" *or* "still looking". Treating those the
+    // same closed the sheet on every keystroke, which is what flickered.
+    expect(shouldShowSheet(0, true)).toBe(true);
+    expect(shouldShowSheet(4, false)).toBe(true);
+    expect(shouldShowSheet(0, false)).toBe(false);
   });
 });

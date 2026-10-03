@@ -126,3 +126,14 @@ export function commandAtStart(text: string, commands: CommandInfo[]): CommandIn
   const match = /^\/([A-Za-z][A-Za-z0-9:_-]*)/.exec(text.trim());
   return match ? commands.find((command) => command.name === match[1]) : undefined;
 }
+
+/**
+ * Whether the sheet should be in the tree.
+ *
+ * The bug this exists to prevent: an empty list means two different things — "still
+ * looking" and "nothing matched". Treating them the same closed the sheet on every
+ * keystroke while a fetch was in flight, so typing `@` made it flash.
+ */
+export function shouldShowSheet(itemCount: number, loading: boolean): boolean {
+  return itemCount > 0 || loading;
+}
