@@ -6,6 +6,7 @@ import { getMe } from "./api";
 import { ensureDevice, loadDevice, clearDevice, type StoredDevice } from "./device";
 import type { Outbox } from "./run-state";
 import { Store } from "./store";
+import type { CommandInfo } from "./mentions";
 
 export interface DisplayEntry {
   id?: string;
@@ -287,6 +288,20 @@ export class PiNetConnection {
     this.store(sessionId).set({ attached: false, syncing: false });
   }
 
+  /** What the composer can offer: built-ins, prompt templates, skills, extensions. */
+  async commands(sessionId: string): Promise<CommandInfo[]> {
+    if (!this.controller) throw new Error("not connected");
+    const ack = (await this.controller.command(sessionId, "commands", {})) as { data?: { commands?: CommandInfo[] } | null } | undefined;
+    return ack?.data?.commands ?? [];
+  }
+
+  /** Paths under the session's own directory, for `@` completion. */
+  async files(sessionId: string, prefix: string): Promise<string[]> {
+    if (!this.controller) throw new Error("not connected");
+    const ack = (await this.controller.command(sessionId, "files", { prefix })) as { data?: { files?: string[] } | null } | undefined;
+    return ack?.data?.files ?? [];
+  }
+
   /** Optimistically echo the user's message, then send it and track delivery. */
   async prompt(sessionId: string, text: string): Promise<void> {
     if (!this.controller) throw new Error("not connected");
@@ -297,11 +312,15 @@ export class PiNetConnection {
       outbox: { status: "sending", at: Date.now(), entriesAt: state.entries.length + 1, sawRun: false },
     }));
     try {
-      const ack = (await this.controller.command(sessionId, "prompt", { text })) as { accepted?: boolean; mode?: string; error?: string } | undefined;
+      const ack = (await this.controller.command(sessionId, "prompt", { text })) as
+        | { accepted?: boolean; mode?: string; error?: string; data?: { notice?: string } | null }
+        | undefined;
       if (ack && ack.accepted === false) {
         store.set((state) => ({
           pendingEchoes: Math.max(0, state.pendingEchoes - 1),
-          outbox: { status: "error", at: Date.now(), error: ack.error ?? "rejected" },
+          // The host explains a refusal in `data.notice` — a command that needs an
+          // argument, or one that only exists in the terminal. Show that, not "rejected".
+          outbox: { status: "error", at: Date.now(), error: ack.data?.notice ?? ack.error ?? "rejected" },
         }));
         return;
       }

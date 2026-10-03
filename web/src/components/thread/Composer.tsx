@@ -3,6 +3,8 @@ import { ArrowUpIcon, BrainIcon, ChevronDownIcon, LoaderIcon, MicIcon, Minimize2
 import { cn } from "../../lib/utils";
 import type { ModelInfo } from "../../lib/pinet";
 import { appendPeaks, startVoiceRecorder, MicError, type VoiceRecorder } from "../../lib/voice";
+import { activeToken, commandAtStart, commandItems, fileItems, replaceToken, tuiOnlyNotice, type CommandInfo, type MenuItem, type Token } from "../../lib/mentions";
+import { AnchoredMenu } from "../ui/AnchoredMenu";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { ghostButton, iconSwap, iconSwapIn, iconSwapOut, paper } from "../ui/surfaces";
@@ -29,6 +31,8 @@ export function Composer({
   onCompact,
   onThinking,
   onVoiceTake,
+  commands,
+  loadFiles,
 }: {
   busy: boolean;
   disabled: boolean;
@@ -48,6 +52,10 @@ export function Composer({
   onThinking: (level: string) => void;
   /** Send a take for transcription; resolves with the cleaned text. */
   onVoiceTake?: (chunks: string[]) => Promise<{ text: string; raw?: string; flags?: string[] }>;
+  /** Slash commands the session offers, for the `/` palette. */
+  commands?: CommandInfo[];
+  /** Paths under the session directory, for `@` completion. */
+  loadFiles?: (prefix: string) => Promise<string[]>;
 }) {
   const [text, setText] = useState("");
   const [thinkingOpen, setThinkingOpen] = useState(false);
@@ -56,6 +64,8 @@ export function Composer({
   const [polishing, setPolishing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ token: Token; index: number } | null>(null);
+  const [fileMatches, setFileMatches] = useState<string[]>([]);
   const [retryTake, setRetryTake] = useState<string[] | null>(null);
   const takeRef = useRef<string[]>([]);
   const [insertion, setInsertion] = useState<{ start: number; end: number; at: number } | null>(null);
@@ -71,6 +81,14 @@ export function Composer({
   }, [text]);
 
   function submit() {
+    // A command that only exists in the terminal is refused here, with the reason,
+    // rather than after a round trip.
+    const terminalOnly = commandAtStart(text, commands ?? []);
+    if (terminalOnly?.source === "tui") {
+      setNotice(tuiOnlyNotice(terminalOnly.name));
+      return;
+    }
+    setMenu(null);
     const value = text.trim();
     if (!value || disabled) return;
     setText("");
@@ -186,6 +204,54 @@ export function Composer({
   }, [insertion]);
 
 
+  // -- `/` commands and `@` mentions -----------------------------------------
+
+  const items: MenuItem[] = menu?.token.kind === "mention" ? fileItems(fileMatches) : commandItems(commands ?? [], menu?.token.query ?? "");
+  const menuOpen = menu !== null && items.length > 0;
+  const active = menu ? Math.min(menu.index, Math.max(0, items.length - 1)) : 0;
+
+  /** Recompute the token under the caret. The highlighted row survives typing. */
+  function syncMenu(next?: string) {
+    const element = textareaRef.current;
+    const value = next ?? text;
+    const token = activeToken(value, element?.selectionStart ?? value.length);
+    setMenu((current) => (token ? { token, index: current && current.token.kind === token.kind ? current.index : 0 } : null));
+  }
+
+  // Held in a ref: an inline `loadFiles` from the parent changes identity every
+  // render, which would otherwise re-run this effect on every keystroke.
+  const loadFilesRef = useRef(loadFiles);
+  useEffect(() => {
+    loadFilesRef.current = loadFiles;
+  }, [loadFiles]);
+
+  useEffect(() => {
+    if (menu?.token.kind !== "mention") {
+      setFileMatches([]);
+      return;
+    }
+    const query = menu.token.query;
+    // The host owns the directory and does the ranking; debounced so typing does
+    // not fire a request per character.
+    const timer = setTimeout(() => {
+      void loadFilesRef.current?.(query).then(setFileMatches).catch(() => setFileMatches([]));
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [menu?.token.kind, menu?.token.query]);
+
+  function accept(item: MenuItem) {
+    if (!menu || item.disabled) return;
+    const { text: next, caret } = replaceToken(text, menu.token, item.insert);
+    setText(next);
+    setMenu(null);
+    requestAnimationFrame(() => {
+      const element = textareaRef.current;
+      if (!element) return;
+      element.focus();
+      element.setSelectionRange(caret, caret);
+    });
+  }
+
   const hasText = text.trim().length > 0;
   // While a run is in flight the button only becomes "stop" when there is
   // nothing to send; with text it stays a send button so a steering message can
@@ -194,12 +260,57 @@ export function Composer({
 
   return (
     <div className={cn(paper, "flex w-full flex-col gap-1 rounded-[24px] p-2.5 shadow-lg shadow-black/5 transition-colors")}>
+      {menuOpen && (
+        <AnchoredMenu anchor={textareaRef.current} onClose={() => setMenu(null)} width={320}>
+          {items.map((item, index) => (
+            <button
+              key={item.value}
+              type="button"
+              disabled={item.disabled}
+              onMouseEnter={() => setMenu((current) => current && { ...current, index })}
+              onClick={() => accept(item)}
+              className={cn(
+                "flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] transition-colors",
+                index === active && !item.disabled ? "bg-foreground/[0.06]" : "hover:bg-foreground/[0.04]",
+                item.disabled && "opacity-45",
+              )}
+            >
+              <span className="shrink-0 font-medium">{item.label}</span>
+              {item.hint && <span className="shrink-0 text-[10.5px] text-muted-foreground/55">{item.hint}</span>}
+              {item.description && <span className="ml-auto truncate text-[10.5px] text-muted-foreground/55">{item.description}</span>}
+            </button>
+          ))}
+        </AnchoredMenu>
+      )}
       <textarea
         ref={textareaRef}
         value={text}
         disabled={disabled}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => {
+          setText(event.target.value);
+          syncMenu(event.target.value);
+        }}
+        onKeyUp={() => syncMenu()}
+        onClick={() => syncMenu()}
         onKeyDown={(event) => {
+          if (menuOpen) {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              const step = event.key === "ArrowDown" ? 1 : items.length - 1;
+              setMenu((current) => current && { ...current, index: (current.index + step) % items.length });
+              return;
+            }
+            if (event.key === "Enter" || event.key === "Tab") {
+              event.preventDefault();
+              accept(items[active]);
+              return;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setMenu(null);
+              return;
+            }
+          }
           // Enter inserts a newline (mobile keyboards send a bare Enter); send
           // explicitly with the button or Cmd/Ctrl+Enter.
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {

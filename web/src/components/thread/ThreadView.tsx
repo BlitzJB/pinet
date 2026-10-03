@@ -9,6 +9,7 @@ import { deriveRunFeedback } from "../../lib/run-state";
 import { ghostButton } from "../ui/surfaces";
 import { groupEntries, MessageGroup } from "./Message";
 import { Composer } from "./Composer";
+import type { CommandInfo } from "../../lib/mentions";
 import { ConnectionState } from "./ConnectionState";
 import { RunIndicator } from "./RunIndicator";
 
@@ -72,6 +73,23 @@ function StartingSession({ name }: { name?: string | null }) {
 
 export function ThreadView({ sessionId }: { sessionId: string }) {
   const connection = usePiNet();
+
+  // Slash commands and file paths both come from the host: it knows which commands
+  // this session registered, and it owns the directory the mentions point into.
+  const [commands, setCommands] = useState<CommandInfo[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void connection
+      .commands(sessionId)
+      .then((list) => {
+        if (!cancelled) setCommands(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, sessionId]);
+  const loadFiles = useCallback((prefix: string) => connection.files(sessionId, prefix), [connection, sessionId]);
   const conn = useConnectionState();
   const state = useSessionState(sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -262,6 +280,8 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
         <div className="mx-auto flex w-full max-w-[44rem] flex-col gap-1.5 px-4 pt-2 pb-1.5">
           <ConnectionState status={conn.status} error={conn.error} />
           <Composer
+            commands={commands}
+            loadFiles={loadFiles}
             busy={running}
             disabled={!state.attached}
             attached={state.attached}

@@ -24,6 +24,7 @@ import { clearHostState, ensureHostKeys, enrollHostWithCode, loadHostState, onbo
 import { SessionSpawner, detectGit, detectTmux } from "../src/host/spawner.mjs";
 import { HISTORY_PAGE_SIZE, INITIAL_ENTRY_LIMIT, historyWindow } from "../src/host/history.mjs";
 import { DEFAULT_POLICIES, VoicePipeline, VoiceSpool, createCleaner, createTranscriber, resolveApiKey } from "../src/host/voice.mjs";
+import { commandCatalogue, filterPaths, resolveCommand, tuiOnlyNotice, walkFiles } from "../src/host/commands.mjs";
 
 type Json = Record<string, unknown>;
 type Pi = ExtensionAPI;
@@ -401,6 +402,21 @@ export default function pinet(pi: Pi): void {
       case "prompt": {
         const text = String(args.text ?? "");
         if (!text) return { accepted: false, mode: null, error: "empty_prompt" };
+        // A message starting with a slash is resolved here rather than in the client,
+        // so every controller behaves the same way. Commands pi expands itself pass
+        // through untouched; the ones with a session API become that op; the
+        // terminal-only ones are refused with a reason instead of silently doing
+        // nothing. An unknown `/foo` — and a path like `/root/pinet` — is left alone.
+        const resolved = resolveCommand(text, { commands: pi.getCommands() as never });
+        if (resolved.kind === "portal") {
+          const rewrite = rewritePortalCommand(resolved.name, resolved.args, ctx);
+          if (rewrite.refuse) {
+            return { accepted: false, mode: null, error: rewrite.error, data: { notice: rewrite.refuse } };
+          }
+          if (rewrite.op) return handleCommand({ op: rewrite.op, args: { ...args, ...rewrite.args } });
+        } else if (resolved.kind === "tui-only") {
+          return { accepted: false, mode: null, error: "tui_only", data: { notice: tuiOnlyNotice(resolved.name) } };
+        }
         const { deliverAs, mode } = resolveDelivery({ isIdle: ctx.isIdle(), requested: typeof args.deliverAs === "string" ? args.deliverAs : undefined });
         const images = Array.isArray(args.images) ? (args.images as never[]) : undefined;
         const content = images ? ([{ type: "text", text }, ...images] as never) : text;
@@ -471,6 +487,18 @@ export default function pinet(pi: Pi): void {
           },
         };
       }
+      case "commands":
+        // What the composer offers. Sent encrypted like everything else that
+        // describes a session's contents.
+        return { accepted: true, mode: null, data: { commands: commandCatalogue({ commands: pi.getCommands() as never }) } };
+      case "files": {
+        // Completion for `@` mentions, scoped to this session's own directory and
+        // bounded: it feeds a picker, not a file browser.
+        const cwd = ctx.sessionManager.getCwd();
+        const prefix = typeof args.prefix === "string" ? args.prefix : "";
+        const limit = Math.min(Math.max(1, Number(args.limit) || 40), 200);
+        return { accepted: true, mode: null, data: { files: filterPaths(walkFiles(cwd), prefix, limit), cwd } };
+      }
       case "set_thinking":
         pi.setThinkingLevel(String(args.level ?? "off") as never);
         return { accepted: true, mode: "immediate" };
@@ -504,6 +532,41 @@ export default function pinet(pi: Pi): void {
       }
       default:
         return { accepted: false, mode: null, error: `unknown_op:${op}` };
+    }
+  }
+
+  /**
+   * Map a portal built-in onto the op that implements it, so both entry points share
+   * one implementation. A built-in that needs an argument says so rather than
+   * guessing; `/session` answers with a line of facts.
+   */
+  function rewritePortalCommand(
+    name: string,
+    args: string,
+    ctx: NonNullable<typeof activeCtx>,
+  ): { op?: string; args?: Json; refuse?: string; error?: string } {
+    switch (name) {
+      case "compact":
+        return { op: "compact", args: { instructions: args } };
+      case "model": {
+        if (!args) return { error: "command_needs_argument", refuse: "Give a model, like /model anthropic/claude-sonnet-4" };
+        const slash = args.indexOf("/");
+        if (slash < 1) return { error: "command_needs_argument", refuse: "Give a model as provider/id, like /model anthropic/claude-sonnet-4" };
+        return { op: "set_model", args: { provider: args.slice(0, slash), modelId: args.slice(slash + 1) } };
+      }
+      case "thinking":
+        return args
+          ? { op: "set_thinking", args: { level: args } }
+          : { error: "notice", refuse: `Thinking is ${ctx.thinkingLevel ?? "off"}. Set it with /thinking <level>.` };
+      case "name":
+        return args ? { op: "rename", args: { name: args } } : { error: "command_needs_argument", refuse: "Give a name, like /name Refactor" };
+      case "session": {
+        const entries = ctx.sessionManager.getEntries() as unknown as Json[];
+        const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none";
+        return { error: "notice", refuse: `${ctx.sessionManager.getCwd()} · ${entries.length} entries · ${model}` };
+      }
+      default:
+        return {};
     }
   }
 
