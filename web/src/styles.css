@@ -317,3 +317,21 @@ body {
     transform: none;
   }
 }
+
+/*
+ * iOS Safari resolves `height: 100%` against the layout viewport, which is taller than
+ * the area you can actually see — so a composer pinned to the bottom ends up sitting
+ * above a strip of empty space, and only on iOS. The dynamic viewport unit is the one
+ * that tracks what is visible. Guarded, so browsers without it keep the old rule.
+ *
+ * Deliberately not adding env(safe-area-inset-bottom) here: the composer already
+ * clears the home indicator, and reserving that space again would add the very gap
+ * this is fixing.
+ */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
+}

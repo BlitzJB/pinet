@@ -17,8 +17,6 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 export function Composer({
   busy,
   disabled,
-  attached,
-  mode,
   model,
   thinkingLevel,
   contextUsage,
@@ -475,24 +473,6 @@ export function Composer({
             dragging && "rounded-lg bg-foreground/[0.04] ring-1 ring-ring/30",
           )}
         >
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(event) => {
-              addFiles([...(event.target.files ?? [])]);
-              event.target.value = "";
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            aria-label="Attach files"
-            className={cn(ghostButton, "size-7 shrink-0 rounded-lg p-0 text-muted-foreground/60 hover:text-foreground")}
-          >
-            <PaperclipIcon className="size-3.5" />
-          </button>
 
           {pending.map((item) => (
             <span
@@ -587,20 +567,24 @@ export function Composer({
       />
       <div className="flex items-center gap-1 px-1">
         <div className="flex min-w-0 items-center gap-1">
-          <span
-            aria-label={!attached ? "Not attached" : mode === "control" ? "Control" : "Read-only"}
-            title={
-              !attached
-                ? "Not attached to this session"
-                : mode === "control"
-                  ? "Control — you can send commands"
-                  : `Attached (${mode ?? "read-only"})`
-            }
-            className={cn(
-              "ms-1.5 size-2 shrink-0 rounded-full",
-              !attached ? "bg-foreground/25" : mode === "control" ? "bg-emerald-500" : "bg-amber-400",
-            )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              addFiles([...(event.target.files ?? [])]);
+              event.target.value = "";
+            }}
           />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Attach files"
+            className={cn(ghostButton, "size-7 shrink-0 rounded-lg p-0 text-muted-foreground/60 hover:text-foreground")}
+          >
+            <PaperclipIcon className="size-3.5" />
+          </button>
           {onModel && loadModels && (
             <ModelPicker model={model} disabled={disabled} load={loadModels} onSelect={onModel} />
           )}
