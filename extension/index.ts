@@ -831,7 +831,7 @@ export default function pinet(pi: Pi): void {
   });
 
   pi.registerCommand("pinet", {
-    description: "PiNet remote control: /pinet setup | status | reconnect | logout",
+    description: "PiNet remote control: /pinet setup | mount | status | reconnect | logout",
     handler: async (args, ctx) => {
       const sub = (args.trim().split(/\s+/)[0] || "status").toLowerCase();
       const state = loadHostState(dir);
@@ -895,7 +895,26 @@ export default function pinet(pi: Pi): void {
         return;
       }
 
-      notify(ctx, "Usage: /pinet setup | status | reconnect | logout", "warning");
+      if (sub === "mount") {
+        // `mount` is the host-side verb, so it belongs here. `/portal` is the
+        // controller command — `setup`, `sessions`, `attach`, `detach` all act on
+        // remote sessions — and `mount` was the one verb under it that acts on this
+        // side. `/portal mount` still works: it reaches this same function through
+        // the event bus.
+        if (!state.hostId) {
+          notify(ctx, "PiNet: not enrolled yet — run /pinet setup first.", "warning");
+          return;
+        }
+        if (bridge?.socket?.ready && sessionId) {
+          notify(ctx, `PiNet: already published (${sessionId}).`, "info");
+          return;
+        }
+        await mountHost();
+        notify(ctx, sessionId ? `PiNet: published ${sessionId}.` : "PiNet: mounting — this session will appear shortly.", "info");
+        return;
+      }
+
+      notify(ctx, "Usage: /pinet setup | mount | status | reconnect | logout", "warning");
     },
   });
 
