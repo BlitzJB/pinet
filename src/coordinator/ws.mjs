@@ -346,9 +346,21 @@ export function createGateway({ server, accounts, serverId, now = Date.now, regi
           send(ws, "error", { code: "no_session", message: "unknown session" });
           return;
         }
+        // The hub already knows whether the host is there. Relaying an attach for a
+        // session whose host is gone makes the client wait out a key timeout for
+        // something that can never arrive — and then it cannot tell that apart from a
+        // slow host. Say it now, and name the session.
+        const host = registry.hostFor(data.sessionId);
+        if (!host) {
+          send(ws, "error", {
+            code: "host_offline",
+            sessionId: data.sessionId,
+            message: "the host for this session is not connected",
+          });
+          return;
+        }
         const mode = data.mode === "read" ? "read" : "control";
         const attachment = registry.attach(ws, data.sessionId, mode);
-        const host = registry.hostFor(data.sessionId);
         const hostDevice = host ? accounts.getDevice(host.deviceId) : undefined;
         send(ws, "ctl.attached", {
           sessionId: data.sessionId,

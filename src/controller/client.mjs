@@ -106,9 +106,31 @@ export class PiNetController extends Emitter {
     // If the coordinator rejects the attach (e.g. the session is momentarily gone
     // mid-restart) `attached` times out first; keep `key` from rejecting unhandled.
     keyPromise.catch(() => {});
+    // The hub refuses an attach for a session whose host is offline, and it knows
+    // immediately — so watch for that too rather than waiting out the key timeout.
+    const refusal = this.socket.waitFor("error", {
+      predicate: (data) => data.sessionId === sessionId && data.code === "host_offline",
+      timeoutMs: 15_000,
+    });
+    refusal.catch(() => {});
     const attachedPromise = this.socket.waitFor("ctl.attached", { predicate: (data) => data.sessionId === sessionId });
     this.socket.send("ctl.attach", { sessionId, mode });
-    const attached = await attachedPromise;
+    let attached;
+    try {
+      attached = await Promise.race([attachedPromise, refusal.then(() => undefined)]);
+    } catch (error) {
+      const failure = new Error(`attach refused for ${sessionId}: ${String(error?.message ?? error)}`);
+      failure.code = "attach_failed";
+      failure.sessionId = sessionId;
+      throw failure;
+    }
+    if (!attached) {
+      // host_offline: the session exists and is listed, but nothing will answer for it.
+      const failure = new Error(`the host for ${sessionId} is not connected`);
+      failure.code = "host_offline";
+      failure.sessionId = sessionId;
+      throw failure;
+    }
     try {
       await keyPromise;
     } catch (error) {
