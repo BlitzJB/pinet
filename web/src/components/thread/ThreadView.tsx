@@ -75,8 +75,21 @@ function StartingSession({ name }: { name?: string | null }) {
 export function ThreadView({ sessionId }: { sessionId: string }) {
   const connection = usePiNet();
 
+  // A spinner with no deadline is indistinguishable from "slow". If the attach has
+  // not completed in this long, say so and offer the two things that actually help.
+  const [stalled, setStalled] = useState(false);
+
   const conn = useConnectionState();
   const state = useSessionState(sessionId);
+
+  useEffect(() => {
+    if (state.attached || conn.status !== "connected") {
+      setStalled(false);
+      return;
+    }
+    const timer = setTimeout(() => setStalled(true), 12_000);
+    return () => clearTimeout(timer);
+  }, [state.attached, conn.status, sessionId]);
 
   // Slash commands and file paths both come from the host: it knows which commands
   // this session registered, and it owns the directory the mentions point into.
@@ -239,7 +252,28 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
         >
           {empty ? (
             <div className="mx-auto flex w-full max-w-[44rem] flex-col px-4 pt-6 pb-4">
-              {!state.attached && conn.status === "connected" ? (
+              {stalled && !state.attached ? (
+                <div className="mx-auto max-w-md rounded-xl border border-amber-500/30 bg-amber-500/[0.04] p-4 text-[13px]">
+                  <p className="font-medium text-foreground/80">This session isn't opening.</p>
+                  <p className="mt-1 text-muted-foreground">
+                    The host is connected but hasn't answered for this session, which usually means it isn't
+                    mounted there. On that machine, in the pi session you want to see:
+                  </p>
+                  <code className="mt-2 block rounded-md bg-foreground/[0.05] px-2 py-1.5 font-mono text-[12px] text-foreground/80">
+                    /pinet mount
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStalled(false);
+                      void connection.attach(sessionId, "control").catch(() => {});
+                    }}
+                    className="mt-3 rounded-lg border border-border/60 px-2.5 py-1 text-[12px] text-foreground/75 transition-colors hover:bg-foreground/[0.05]"
+                  >
+                    Try again
+                  </button>
+                </div>
+              ) : !state.attached && conn.status === "connected" ? (
                 <StartingSession name={state.meta?.name} />
               ) : (
                 <Welcome name={state.meta?.name} onPrompt={(text) => void connection.prompt(sessionId, text)} />

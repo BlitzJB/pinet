@@ -101,6 +101,7 @@ export class PiNetController extends Emitter {
   }
 
   async attach(sessionId, mode = "control") {
+    const attachStartedAt = Date.now();
     const keyPromise = this.socket.waitFor("e2e.key", { predicate: (data) => data.sessionId === sessionId, timeoutMs: 15_000 });
     // If the coordinator rejects the attach (e.g. the session is momentarily gone
     // mid-restart) `attached` times out first; keep `key` from rejecting unhandled.
@@ -108,7 +109,21 @@ export class PiNetController extends Emitter {
     const attachedPromise = this.socket.waitFor("ctl.attached", { predicate: (data) => data.sessionId === sessionId });
     this.socket.send("ctl.attach", { sessionId, mode });
     const attached = await attachedPromise;
-    await keyPromise;
+    try {
+      await keyPromise;
+    } catch (error) {
+      // "timeout waiting for e2e.key" does not say which session, or that the host
+      // never answered. Name both, and carry a code so a caller can tell "the host is
+      // offline" from "the host is connected but has nothing mounted for this".
+      const failure = new Error(
+        `no session key for ${sessionId} after ${Date.now() - attachStartedAt}ms — the host did not answer the attach`,
+      );
+      failure.code = "no_key";
+      failure.sessionId = sessionId;
+      failure.waitedMs = Date.now() - attachStartedAt;
+      failure.cause = error;
+      throw failure;
+    }
     await this.queue; // ensure the key has actually been unwrapped and stored
     this.attached.set(sessionId, mode);
     return attached;

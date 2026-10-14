@@ -549,9 +549,10 @@ export function Composer({
               return;
             }
           }
-          // Enter inserts a newline (mobile keyboards send a bare Enter); send
-          // explicitly with the button or Cmd/Ctrl+Enter.
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
+          // Enter sends, Shift+Enter is a newline. An IME candidate selection also
+          // arrives as Enter, so composing is excluded — otherwise picking a
+          // character would send the message.
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             submit();
           } else if (event.key === "Escape" && recording) {
@@ -687,12 +688,12 @@ export function Composer({
           )}
           <ContextMeter usage={contextUsage} compacting={compacting} />
           <span aria-hidden className="hidden text-[10px] text-muted-foreground/35 sm:inline">
-            ⌘↵
+            ↵
           </span>
           <button
             type="button"
             aria-label={stopping ? "Stop" : "Send"}
-            title={stopping ? "Stop" : "Send (⌘↵)"}
+            title={stopping ? "Stop" : "Send (↵)"}
             onClick={stopping ? onStop : submit}
             disabled={disabled || (!stopping && !hasText)}
             className={cn(
