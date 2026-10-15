@@ -1,6 +1,5 @@
 import { cn } from "../lib/utils";
 import { useSessionState } from "../lib/context";
-import { deriveRunFeedback } from "../lib/run-state";
 
 /**
  * The agent's state at a glance, in the sidebar.
@@ -19,21 +18,21 @@ export function SessionStatusDot({ sessionId, className }: { sessionId: string; 
   const running = status.phase === "running" || status.isIdle === false;
   const compacting = Boolean(status.compacting);
   const failed = Boolean(state.outbox && state.outbox.status === "error");
-  const feedback = deriveRunFeedback({ outbox: state.outbox, running, compacting });
+  const waiting = Boolean(state.outbox && state.outbox.status !== "error" && !running);
 
   const tone = failed
     ? "bg-destructive"
     : running || compacting
       ? "bg-emerald-500"
-      : feedback === "waiting"
+      : waiting
         ? "bg-amber-400"
         : "bg-foreground/20";
 
   return (
     <span
       role="status"
-      title={feedback ?? (running ? "working" : "idle")}
-      aria-label={feedback ?? (running ? "working" : "idle")}
+      title={failed ? "the last send failed" : running || compacting ? "working" : waiting ? "waiting on you" : "idle"}
+      aria-label={failed ? "the last send failed" : running || compacting ? "working" : waiting ? "waiting on you" : "idle"}
       className={cn("size-1.5 shrink-0 rounded-full", tone, (running || compacting) && "animate-pulse motion-reduce:animate-none", className)}
     />
   );

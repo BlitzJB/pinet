@@ -12,7 +12,10 @@ import { RenameInput } from "./ui/RenameInput";
 import { Avatar } from "./Avatar";
 import { SpawnDialog, type SpawnCapabilityInfo } from "./SpawnDialog";
 import { useStore } from "../lib/store";
+import { useHidden, toggleHidden } from "../lib/hidden";
+import { ghostButton } from "./ui/surfaces";
 import { ensureSummary, isRunComplete, lastExchange, summaryStore } from "../lib/summaries";
+import { EyeOffIcon } from "lucide-react";
 import { SessionStatusDot } from "./SessionStatusDot";
 
 const COLLAPSE_KEY = "pinet.collapsedHosts";
@@ -119,7 +122,9 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
       ? { ...session, meta: { ...(session.meta ?? {}), name: localNames[session.sessionId] } }
       : session,
   );
-  const groups = groupSessionsByHost(sessions, filter);
+  const hidden = useHidden();
+  const visible = sessions.filter((session) => !hidden.includes(session.sessionId));
+  const groups = groupSessionsByHost(visible, filter);
   const menuPane = menu ? availability(menu.id) : { allowed: false };
   const searching = filter.trim().length > 0;
 
@@ -217,6 +222,24 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
           </p>
         )}
 
+        {hidden.length > 0 && (
+
+          <button
+
+            type="button"
+
+            onClick={() => hidden.forEach((id) => toggleHidden(id))}
+
+            className={cn(ghostButton, "mx-1 mb-1 h-auto rounded-md px-2 py-1.5 text-left text-[11px] text-muted-foreground/60")}
+
+          >
+
+            Show {hidden.length} hidden
+
+          </button>
+
+        )}
+
         {groups.map((group) => {
           const isCollapsed = !searching && collapsed.has(group.hostId);
           const capability = group.sessions.find((session) => session.meta?.spawn)?.meta?.spawn;
@@ -309,6 +332,22 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                         <span className="block truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
                         {/* What the agent is doing, without opening the status board. */}
                       <SessionStatusDot sessionId={session.sessionId} className="mb-0.5" />
+                      <button
+                        type="button"
+                        title="Hide from the sidebar and the status board"
+                        aria-label="Hide this session"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          toggleHidden(session.sessionId);
+                        }}
+                        className={cn(
+                          ghostButton,
+                          "absolute end-1 top-1 size-5 rounded p-0 opacity-0 transition-opacity group-hover/session:opacity-100 focus-visible:opacity-100",
+                        )}
+                      >
+                        <EyeOffIcon className="size-3" />
+                      </button>
                       {bySession[session.sessionId]?.[0]?.text && (
                           <span className="block truncate text-[11px] leading-tight text-muted-foreground/55" title={bySession[session.sessionId][0].text}>
                             {bySession[session.sessionId][0].text}

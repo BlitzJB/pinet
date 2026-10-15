@@ -9,6 +9,7 @@ import { deriveRunFeedback } from "../lib/run-state";
 import { isRunComplete, parseSummary, useRunSummary, type SummaryLabel } from "../lib/summaries";
 import { RunIndicator } from "../components/thread/RunIndicator";
 import { cn } from "../lib/utils";
+import { useHidden } from "../lib/hidden";
 
 /** How many sessions to hold live status for. Each one is an attachment. */
 const LIVE_LIMIT = 12;
@@ -36,7 +37,7 @@ export function StatusPage() {
   // Attaching is what makes a session report status, so the board attaches to
   // everything it shows. Bounded, and only once per session.
   useEffect(() => {
-    for (const session of sessions.slice(0, LIVE_LIMIT)) {
+    for (const session of sessions.filter((entry) => !hidden.includes(entry.sessionId)).slice(0, LIVE_LIMIT)) {
       if (!connection.store(session.sessionId).get().attached) {
         void connection.attach(session.sessionId, "control").catch(() => {});
       }
@@ -67,6 +68,7 @@ export function StatusPage() {
     };
   }, []);
 
+  const hidden = useHidden();
   const reconnecting = conn.status !== "connected";
   // Nothing yet, and nothing wrong: the catalog is in flight, or it arrived empty
   // and the attachments are still warming up.
