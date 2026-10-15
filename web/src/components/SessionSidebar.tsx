@@ -167,6 +167,21 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
     }
   }, [summariesEnabled, connection, sessions, bySession]);
 
+  // Attaching is what makes a session report status, and the row's dot needs it. The
+  // board attaches for its own cards; without this the sidebar has nothing to show,
+  // because attachments do not outlive the page — which is why a fresh load looked
+  // like the feature had not shipped. Bounded, since each one is a real attachment.
+  const visibleKey = visible.map((session) => session.sessionId).join(",");
+  useEffect(() => {
+    for (const session of visible.slice(0, 12)) {
+      if (!connection.store(session.sessionId).get().attached) {
+        void connection.attach(session.sessionId, "control").catch(() => {});
+      }
+    }
+    // Keyed on the ids rather than the array, which is a new object every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection, visibleKey]);
+
   /** Create a session through the chosen spawner, in the chosen subdirectory. */
   async function createSession(options: { spawnerId: string; name?: string; dir?: string }): Promise<void> {
     const result = await connection.spawnOnSpawner(options.spawnerId, { name: options.name, dir: options.dir });
