@@ -13,7 +13,20 @@ import { useSessionState } from "../lib/context";
 export function SessionStatusDot({ sessionId, className }: { sessionId: string; className?: string }) {
   const state = useSessionState(sessionId);
   const status = state.status;
-  if (!status) return null;
+  if (!status) {
+    // A visible placeholder rather than nothing. Rendering null was honest but made two
+    // very different situations identical: a stale bundle that never ran this component
+    // at all, and a component running with no status to show. A hollow ring tells them
+    // apart, which is the whole reason this took several rounds to diagnose.
+    return (
+      <span
+        role="status"
+        title={state.attached ? "attached, waiting for status" : "not attached"}
+        aria-label={state.attached ? "attached, waiting for status" : "not attached"}
+        className={cn("size-2 shrink-0 rounded-full border border-dashed border-foreground/30", className)}
+      />
+    );
+  }
 
   const running = status.phase === "running" || status.isIdle === false;
   const compacting = Boolean(status.compacting);
