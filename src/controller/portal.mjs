@@ -3,6 +3,9 @@
 // can be tested without a TUI.
 
 /** Map a remote pi session entry to a renderable block, or null to skip. */
+/** Enough for any real diff; a whole-file write is clipped rather than dropped. */
+export const MAX_TOOL_ARGS = 64 * 1024;
+
 export function describeEntry(entry) {
   if (!entry || typeof entry !== "object") return null;
   if (entry.type === "message" && entry.message) {
@@ -13,7 +16,11 @@ export function describeEntry(entry) {
       const content = Array.isArray(message.content) ? message.content : [];
       const tools = content
         .filter((block) => block?.type === "toolCall")
-        .map((block) => ({ id: block.id, name: block.name, args: shorten(JSON.stringify(block.arguments), 300) }));
+        // The ceiling on a tool's arguments. It was 300 characters, which cut the JSON
+        // mid-string: the client could not parse it, so every path, target and diff was
+        // silently lost while the tool name still rendered. A diff needs the whole edit.
+        // Clipped honestly when a write is enormous.
+        .map((block) => ({ id: block.id, name: block.name, args: shorten(JSON.stringify(block.arguments), MAX_TOOL_ARGS) }));
       const reasoning = content.filter((block) => block?.type === "thinking").map((block) => block.thinking).join("\n");
       const body = [text, ...tools.map((tool) => `${tool.name} ${tool.args}`)].filter(Boolean).join("\n");
       if (!body.trim() && !reasoning.trim()) return null;
