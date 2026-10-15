@@ -26,14 +26,14 @@ export function SessionStatusDot({ sessionId, className }: { sessionId: string; 
       ? "bg-emerald-500"
       : waiting
         ? "bg-amber-400"
-        : "bg-foreground/20";
+        : "bg-foreground/40";
 
   return (
     <span
       role="status"
       title={failed ? "the last send failed" : running || compacting ? "working" : waiting ? "waiting on you" : "idle"}
       aria-label={failed ? "the last send failed" : running || compacting ? "working" : waiting ? "waiting on you" : "idle"}
-      className={cn("size-1.5 shrink-0 rounded-full", tone, (running || compacting) && "animate-pulse motion-reduce:animate-none", className)}
+      className={cn("size-2 shrink-0 rounded-full", tone, (running || compacting) && "animate-pulse motion-reduce:animate-none", className)}
     />
   );
 }
