@@ -11,14 +11,14 @@
  * as records are dropped — they pin the blob in memory until they are, which is the
  * usual way this kind of cache leaks.
  */
-const DB_NAME = "pinet";
-const STORE = "attachments";
-const VERSION = 1;
+import { STORE_ATTACHMENTS as STORE, run } from "./idb";
 /** Long enough to survive a lunch break, short enough that a screenshot is not kept for weeks. */
 export const ATTACHMENT_TTL_MS = 12 * 60 * 60 * 1000;
 
 export interface StoredAttachment {
   id: string;
+  /** Which session it was uploaded for. */
+  sessionId?: string;
   name: string;
   mime: string;
   size: number;
@@ -30,39 +30,14 @@ export interface StoredAttachment {
   expiresAt: number;
 }
 
-function open(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: "id" });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-function run<T>(mode: IDBTransactionMode, work: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  return open().then(
-    (db) =>
-      new Promise<T>((resolve, reject) => {
-        const transaction = db.transaction(STORE, mode);
-        const request = work(transaction.objectStore(STORE));
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-        transaction.oncomplete = () => db.close();
-      }),
-  );
-}
-
 /** Drop anything past its expiry, revoking previews as it goes. */
 export async function pruneAttachments(now = Date.now()): Promise<void> {
   try {
-    const all = await run<StoredAttachment[]>("readonly", (store) => store.getAll() as IDBRequest<StoredAttachment[]>);
+    const all = await run<StoredAttachment[]>(STORE, "readonly", (store) => store.getAll() as IDBRequest<StoredAttachment[]>);
     for (const record of all) {
       if (record.expiresAt <= now) {
         if (record.preview) URL.revokeObjectURL(record.preview);
-        await run("readwrite", (store) => store.delete(record.id) as unknown as IDBRequest<IDBValidKey>);
+        await run(STORE, "readwrite", (store) => store.delete(record.id));
       }
     }
   } catch {
@@ -72,7 +47,7 @@ export async function pruneAttachments(now = Date.now()): Promise<void> {
 
 export async function putAttachment(record: Omit<StoredAttachment, "expiresAt">): Promise<void> {
   try {
-    await run("readwrite", (store) =>
+    await run(STORE, "readwrite", (store) =>
       store.put({ ...record, expiresAt: Date.now() + ATTACHMENT_TTL_MS }) as unknown as IDBRequest<IDBValidKey>,
     );
   } catch {
@@ -81,11 +56,13 @@ export async function putAttachment(record: Omit<StoredAttachment, "expiresAt">)
 }
 
 /** Everything still within its TTL, newest first, pruning as it reads. */
-export async function listAttachments(): Promise<StoredAttachment[]> {
+export async function listAttachments(sessionId?: string): Promise<StoredAttachment[]> {
   try {
     await pruneAttachments();
-    const all = await run<StoredAttachment[]>("readonly", (store) => store.getAll() as IDBRequest<StoredAttachment[]>);
-    return all.sort((a, b) => b.expiresAt - a.expiresAt);
+    const all = await run<StoredAttachment[]>(STORE, "readonly", (store) => store.getAll() as IDBRequest<StoredAttachment[]>);
+    return all
+      .filter((record) => !sessionId || record.sessionId === sessionId)
+      .sort((a, b) => b.expiresAt - a.expiresAt);
   } catch {
     return [];
   }
@@ -93,9 +70,9 @@ export async function listAttachments(): Promise<StoredAttachment[]> {
 
 export async function deleteAttachment(id: string): Promise<void> {
   try {
-    const record = await run<StoredAttachment | undefined>("readonly", (store) => store.get(id) as IDBRequest<StoredAttachment | undefined>);
+    const record = await run<StoredAttachment | undefined>(STORE, "readonly", (store) => store.get(id) as IDBRequest<StoredAttachment | undefined>);
     if (record?.preview) URL.revokeObjectURL(record.preview);
-    await run("readwrite", (store) => store.delete(id) as unknown as IDBRequest<IDBValidKey>);
+    await run(STORE, "readwrite", (store) => store.delete(id));
   } catch {
     /* best effort */
   }

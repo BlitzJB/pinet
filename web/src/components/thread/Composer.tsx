@@ -4,6 +4,8 @@ import { cn } from "../../lib/utils";
 import type { ModelInfo } from "../../lib/pinet";
 import { appendPeaks, startVoiceRecorder, MicError, type VoiceRecorder } from "../../lib/voice";
 import { checkFile, type AttachmentRef, type PendingAttachment } from "../../lib/attachments";
+import { clearDraft, loadDraft, saveDraft } from "../../lib/drafts";
+import { deleteAttachment, listAttachments, putAttachment } from "../../lib/attachment-store";
 import { activeToken, commandAtStart, commandItems, fileItems, replaceToken, shouldShowSheet, tuiOnlyNotice, type CommandInfo, type MenuItem, type Token } from "../../lib/mentions";
 import { ComposerMenu } from "../ui/ComposerMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -32,6 +34,7 @@ export function Composer({
   commands,
   loadFiles,
   uploadAttachment,
+  sessionId,
 }: {
   busy: boolean;
   disabled: boolean;
@@ -57,6 +60,8 @@ export function Composer({
   loadFiles?: (prefix: string) => Promise<string[]>;
   /** Send one file; resolves once the host has it. */
   uploadAttachment?: (file: File, onProgress: (fraction: number) => void) => Promise<AttachmentRef>;
+  /** Which session this composer is writing to; drafts and attachments are per session. */
+  sessionId?: string;
 }) {
   const [text, setText] = useState("");
   const [thinkingOpen, setThinkingOpen] = useState(false);
@@ -71,6 +76,42 @@ export function Composer({
   const [visible, setVisible] = useState(false);
   const [fileMatches, setFileMatches] = useState<string[]>([]);
   const [pending, setPending] = useState<PendingAttachment[]>([]);
+
+  // The unsent text and any pending attachments come back on a reload. Drafts fill an
+  // empty composer only: a slow read must never overwrite what someone has since typed.
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    void loadDraft(sessionId).then((saved) => {
+      if (!cancelled && saved) setText((current) => (current.length === 0 ? saved : current));
+    });
+    void listAttachments(sessionId).then((records) => {
+      if (cancelled) return;
+      setPending((current) => [
+        ...current,
+        ...records.map((record) => ({
+          id: record.id,
+          name: record.name,
+          mime: record.mime,
+          size: record.size,
+          kind: record.kind,
+          preview: record.kind === "image" && record.blob ? URL.createObjectURL(record.blob) : undefined,
+          status: "ready" as const,
+          progress: 1,
+        })),
+      ]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  // Debounced, so a keystroke is not a transaction.
+  useEffect(() => {
+    if (!sessionId) return;
+    const timer = setTimeout(() => void saveDraft(sessionId, text), 400);
+    return () => clearTimeout(timer);
+  }, [sessionId, text]);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Files arrive asynchronously, so "empty" and "still looking" have to be told
@@ -105,6 +146,8 @@ export function Composer({
     // An image with no words is a legitimate message.
     if ((!value && attachments.length === 0) || disabled) return;
     setText("");
+    void clearDraft(sessionId ?? "");
+    for (const attachment of attachments) void deleteAttachment(attachment.id);
     setPending((current) => current.filter((item) => item.status !== "ready"));
     void onSend(value, attachments);
   }
@@ -367,9 +410,18 @@ export function Composer({
       void uploadAttachment(file, (fraction) =>
         setPending((current) => current.map((item) => (item.id === local ? { ...item, progress: fraction } : item))),
       )
-        .then((attachment) =>
-          setPending((current) => current.map((item) => (item.id === local ? { ...attachment, id: attachment.id, status: "ready", progress: 1 } : item))),
-        )
+        .then((attachment) => {
+          void putAttachment({
+            id: attachment.id,
+            sessionId,
+            name: attachment.name,
+            mime: attachment.mime,
+            size: attachment.size,
+            kind: attachment.kind,
+            blob: attachment.kind === "image" ? file : undefined,
+          });
+          setPending((current) => current.map((item) => (item.id === local ? { ...attachment, id: attachment.id, status: "ready", progress: 1 } : item)));
+        })
         .catch((error: unknown) =>
           setPending((current) =>
             current.map((item) => (item.id === local ? { ...item, status: "error", error: error instanceof Error ? error.message : "upload failed" } : item)),
@@ -496,7 +548,10 @@ export function Composer({
               )}
               <button
                 type="button"
-                onClick={() => setPending((current) => current.filter((other) => other.id !== item.id))}
+                onClick={() => {
+                  void deleteAttachment(item.id);
+                  setPending((current) => current.filter((other) => other.id !== item.id));
+                }}
                 aria-label={`Remove ${item.name}`}
                 className="shrink-0 rounded p-0.5 text-foreground/35 transition-colors hover:text-foreground"
               >

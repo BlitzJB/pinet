@@ -329,6 +329,7 @@ export function ThreadView({ sessionId }: { sessionId: string }) {
           <Composer
             commands={commands}
             uploadAttachment={uploadAttachment}
+            sessionId={sessionId}
             loadFiles={loadFiles}
             busy={running}
             disabled={!state.attached}

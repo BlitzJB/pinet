@@ -1,42 +1,65 @@
 /**
  * The text you have typed but not sent, per session.
  *
- * localStorage is the right store for this and IndexedDB is not: drafts are small
- * strings, they are written on every keystroke, and a synchronous write of a few
- * hundred bytes is cheaper than the transaction an IndexedDB put would cost. The cap
- * matters because localStorage is a shared ~5MB budget — a huge paste should not be
- * able to evict everything else, so an oversized draft is simply not kept.
+ * IndexedDB rather than localStorage. Drafts are small, but localStorage is a shared
+ * ~5MB budget the browser is free to evict — and evicting someone's half-written message
+ * is a worse failure than the few milliseconds an async write costs. Old drafts are
+ * dropped after a fortnight, on the same lazy-expiry scheme as attachments.
  */
-const PREFIX = "pinet.draft.";
-const MAX_BYTES = 32 * 1024;
+import { STORE_DRAFTS, pruneByExpiry, run } from "./idb";
 
-const key = (sessionId: string) => `${PREFIX}${sessionId}`;
+const MAX_CHARS = 64 * 1024;
+const TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
-export function loadDraft(sessionId: string): string {
+interface Draft {
+  sessionId: string;
+  text: string;
+  expiresAt: number;
+}
+
+export async function loadDraft(sessionId: string): Promise<string> {
   try {
-    return localStorage.getItem(key(sessionId)) ?? "";
+    const record = await run<Draft | undefined>(STORE_DRAFTS, "readonly", (store) => store.get(sessionId));
+    if (!record) return "";
+    if (record.expiresAt <= Date.now()) {
+      await clearDraft(sessionId);
+      return "";
+    }
+    return record.text;
   } catch {
     return "";
   }
 }
 
-export function saveDraft(sessionId: string, text: string): void {
+export async function saveDraft(sessionId: string, text: string): Promise<void> {
   try {
     if (text.length === 0) {
-      localStorage.removeItem(key(sessionId));
+      await clearDraft(sessionId);
       return;
     }
-    if (text.length > MAX_BYTES) return;
-    localStorage.setItem(key(sessionId), text);
+    // A pasted novel is not worth a quota problem; keep the first chunk rather than fail.
+    const record: Draft = { sessionId, text: text.slice(0, MAX_CHARS), expiresAt: Date.now() + TTL_MS };
+    await run(STORE_DRAFTS, "readwrite", (store) => store.put(record));
   } catch {
-    /* private mode, or full: the draft simply does not survive the tab */
+    /* private mode, or a locked profile: the draft simply does not survive the tab */
   }
 }
 
-export function clearDraft(sessionId: string): void {
+export async function clearDraft(sessionId: string): Promise<void> {
   try {
-    localStorage.removeItem(key(sessionId));
+    await run(STORE_DRAFTS, "readwrite", (store) => store.delete(sessionId));
   } catch {
     /* nothing to do */
+  }
+}
+
+/** Drop drafts nobody has touched in a fortnight. */
+export async function pruneDrafts(): Promise<void> {
+  try {
+    await pruneByExpiry<Draft>(STORE_DRAFTS, () =>
+      run<Draft[]>(STORE_DRAFTS, "readonly", (store) => store.getAll()),
+    );
+  } catch {
+    /* best effort */
   }
 }
