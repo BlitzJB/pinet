@@ -7,6 +7,7 @@ import { useConnectionState, usePiNet } from "../lib/context";
 import { groupSessionsByHost } from "../lib/session-groups";
 import { cn } from "../lib/utils";
 import { usePanes } from "../lib/use-panes";
+import { EyeOffIcon } from "lucide-react";
 import { AnchoredMenu, menuItem } from "./ui/AnchoredMenu";
 import { RenameInput } from "./ui/RenameInput";
 import { Avatar } from "./Avatar";
@@ -78,6 +79,7 @@ function RowMenu({
         Open to the side
       </button>
       <button type="button" onClick={onHide} className={cn(menuItem, "text-muted-foreground")}>
+        <EyeOffIcon className="size-3.5 shrink-0" />
         Hide session
       </button>
     </AnchoredMenu>
