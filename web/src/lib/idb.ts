@@ -11,15 +11,26 @@ export const STORE_ATTACHMENTS = "attachments";
 export const STORE_DRAFTS = "drafts";
 
 export function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_ATTACHMENTS)) db.createObjectStore(STORE_ATTACHMENTS, { keyPath: "id" });
-      if (!db.objectStoreNames.contains(STORE_DRAFTS)) db.createObjectStore(STORE_DRAFTS, { keyPath: "sessionId" });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+  const request = (version?: number) =>
+    new Promise<IDBDatabase>((resolve, reject) => {
+      const open = version === undefined ? indexedDB.open(DB_NAME) : indexedDB.open(DB_NAME, version);
+      open.onupgradeneeded = () => {
+        const db = open.result;
+        if (!db.objectStoreNames.contains(STORE_ATTACHMENTS)) db.createObjectStore(STORE_ATTACHMENTS, { keyPath: "id" });
+        if (!db.objectStoreNames.contains(STORE_DRAFTS)) db.createObjectStore(STORE_DRAFTS, { keyPath: "sessionId" });
+      };
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => reject(open.error);
+    });
+
+  return request(DB_VERSION).catch((error: unknown) => {
+    // A tab still running an older bundle can hold this database at a higher version than
+    // the one we ask for, and the open fails outright. That is not a reason to break: open
+    // whatever version exists and use the stores that are actually there. Each caller
+    // already treats a missing store as "nothing stored", so the feature degrades quietly
+    // instead of taking the app down.
+    if ((error as { name?: string })?.name === "VersionError") return request();
+    throw error;
   });
 }
 
