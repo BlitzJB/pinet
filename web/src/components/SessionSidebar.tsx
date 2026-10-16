@@ -339,7 +339,7 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                       search={() => searchFor(session.sessionId)}
                       onClick={onNavigate}
                       className={cn(
-                        "group flex items-center gap-2.5 rounded-lg py-2 ps-8 pe-1.5 transition-colors",
+                        "group relative flex items-center gap-2.5 rounded-lg py-2 ps-8 pe-1.5 transition-colors",
                         active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-foreground/[0.04]",
                       )}
                     >
@@ -358,7 +358,7 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                         }}
                         className={cn(
                           ghostButton,
-                          "absolute end-1 top-1 size-5 rounded p-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+                          "absolute end-1 top-1.5 size-5 rounded p-0 text-foreground/25 transition-colors hover:text-foreground",
                         )}
                       >
                         <EyeOffIcon className="size-3" />
