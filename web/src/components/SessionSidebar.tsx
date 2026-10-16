@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRightIcon, MessageSquareIcon, MoreVerticalIcon, PanelRightIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon, SettingsIcon } from "lucide-react";
+import { ChevronRightIcon, MoreVerticalIcon, PanelRightIcon, PencilIcon, PlusIcon, SearchIcon, ServerIcon, SettingsIcon } from "lucide-react";
 import { getMe } from "../lib/api";
 import { useConnectionState, usePiNet } from "../lib/context";
 import { groupSessionsByHost } from "../lib/session-groups";
@@ -16,7 +16,7 @@ import { useHidden, toggleHidden } from "../lib/hidden";
 import { ghostButton } from "./ui/surfaces";
 import { ensureSummary, isRunComplete, lastExchange, summaryStore } from "../lib/summaries";
 import { EyeOffIcon } from "lucide-react";
-import { SessionStatusDot } from "./SessionStatusDot";
+import { SessionStatusIcon } from "./SessionStatusIcon";
 
 const COLLAPSE_KEY = "pinet.collapsedHosts";
 
@@ -342,9 +342,8 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                         active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-foreground/[0.04]",
                       )}
                     >
-                      <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                      {/* What the agent is doing, without opening the status board. */}
-                      <SessionStatusDot sessionId={session.sessionId} />
+                      {/* The chat icon carries the status: colour for state, a pulse while working. */}
+                      <SessionStatusIcon sessionId={session.sessionId} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
                         <button
