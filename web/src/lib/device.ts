@@ -27,7 +27,20 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
     };
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("indexedDB open failed"));
+    request.onerror = () => {
+      // v0.31.0 opened this same database at version 2 for unrelated stores, so any browser
+      // that ran it holds "pinet" at 2 and asking for 1 now fails outright. This is the
+      // store that authenticates the client, so that failure surfaced as a lost connection.
+      // Whatever version exists is fine: the device store is in it either way, because that
+      // upgrade only ever added stores.
+      if (request.error?.name === "VersionError") {
+        const retry = indexedDB.open(DB_NAME);
+        retry.onsuccess = () => resolve(retry.result);
+        retry.onerror = () => reject(retry.error ?? new Error("indexedDB open failed"));
+        return;
+      }
+      reject(request.error ?? new Error("indexedDB open failed"));
+    };
   });
 }
 

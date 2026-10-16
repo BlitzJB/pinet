@@ -4,7 +4,7 @@
 // itself changes, and the cleanup below deletes every cache whose name is not this one
 // — so a constant name meant the old shell was never evicted and every deploy after the
 // first was invisible. That is what "is it really deployed?" kept being about.
-const CACHE = "pinet-v10";
+const CACHE = "pinet-v11";
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icon-192.png", "/app/icon-512.png"];
 
 self.addEventListener("install", (event) => {
