@@ -1,44 +1,58 @@
 import { Store, useStore } from "./store";
 
 /**
- * Sessions hidden from the sidebar and the status board.
+ * Sessions and whole hosts hidden from the sidebar and the status board.
  *
  * Kept per browser rather than on the host: it is a view preference about *your* list,
- * not a fact about the session, and two people looking at the same machine may well
- * want different sets. Persisted so it survives a reload.
+ * not a fact about the session, and two people looking at the same machine may well want
+ * different sets. Persisted so it survives a reload.
  */
-const KEY = "pinet.hiddenSessions.v1";
+const KEY = "pinet.hiddenSessions.v2";
 
-function load(): string[] {
+interface Hidden {
+  ids: string[];
+  hosts: string[];
+}
+
+function load(): Hidden {
   try {
-    const parsed = JSON.parse(localStorage.getItem(KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+    const parsed = JSON.parse(localStorage.getItem(KEY) ?? "{}");
+    const strings = (value: unknown) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+    return { ids: strings(parsed?.ids), hosts: strings(parsed?.hosts) };
   } catch {
-    return [];
+    return { ids: [], hosts: [] };
   }
 }
 
-export const hiddenStore = new Store<{ ids: string[] }>({ ids: load() });
+export const hiddenStore = new Store<Hidden>(load());
 
-function persist(ids: string[]) {
+function persist(state: Hidden) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(ids));
+    localStorage.setItem(KEY, JSON.stringify(state));
   } catch {
     /* private mode, or a full quota: the preference simply does not outlive the tab */
   }
 }
 
-export function toggleHidden(sessionId: string) {
+function toggle(key: keyof Hidden, value: string) {
   hiddenStore.set((state) => {
-    const ids = state.ids.includes(sessionId)
-      ? state.ids.filter((id) => id !== sessionId)
-      : [...state.ids, sessionId];
-    persist(ids);
-    return { ids };
+    const next = {
+      ...state,
+      [key]: state[key].includes(value) ? state[key].filter((entry) => entry !== value) : [...state[key], value],
+    };
+    persist(next);
+    return next;
   });
 }
 
-/** The hidden ids, for a component that wants to filter or count them. */
-export function useHidden(): string[] {
-  return useStore(hiddenStore).ids;
+export const toggleHidden = (sessionId: string) => toggle("ids", sessionId);
+export const toggleHiddenHost = (hostId: string) => toggle("hosts", hostId);
+
+/** The hidden sets, for a component that wants to filter or count them. */
+export function useHidden(): Hidden {
+  return useStore(hiddenStore);
 }
+
+/** True when a session is hidden in its own right or because its host is. */
+export const isHidden = (hidden: Hidden, sessionId: string, hostId?: string): boolean =>
+  hidden.ids.includes(sessionId) || Boolean(hostId && hidden.hosts.includes(hostId));

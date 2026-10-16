@@ -12,7 +12,7 @@ import { RenameInput } from "./ui/RenameInput";
 import { Avatar } from "./Avatar";
 import { SpawnDialog, type SpawnCapabilityInfo } from "./SpawnDialog";
 import { useStore } from "../lib/store";
-import { useHidden, toggleHidden } from "../lib/hidden";
+import { useHidden, toggleHidden, toggleHiddenHost, isHidden } from "../lib/hidden";
 import { ghostButton } from "./ui/surfaces";
 import { ensureSummary, isRunComplete, lastExchange, summaryStore } from "../lib/summaries";
 import { EyeOffIcon } from "lucide-react";
@@ -123,7 +123,8 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
       : session,
   );
   const hidden = useHidden();
-  const visible = sessions.filter((session) => !hidden.includes(session.sessionId));
+  const hiddenCount = hidden.ids.length + hidden.hosts.length;
+  const visible = sessions.filter((session) => !isHidden(hidden, session.sessionId, session.hostId));
   const groups = groupSessionsByHost(visible, filter);
   const menuPane = menu ? availability(menu.id) : { allowed: false };
   const searching = filter.trim().length > 0;
@@ -237,19 +238,19 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
           </p>
         )}
 
-        {hidden.length > 0 && (
+        {hiddenCount > 0 && (
 
           <button
 
             type="button"
 
-            onClick={() => hidden.forEach((id) => toggleHidden(id))}
+            onClick={() => { hidden.ids.forEach(toggleHidden); hidden.hosts.forEach(toggleHiddenHost); }}
 
             className={cn(ghostButton, "mx-1 mb-1 h-auto rounded-md px-2 py-1.5 text-left text-[11px] text-muted-foreground/60")}
 
           >
 
-            Show {hidden.length} hidden
+            Show {hiddenCount} hidden
 
           </button>
 
