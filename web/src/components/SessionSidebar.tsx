@@ -402,10 +402,13 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                     setRevealHost(group.hostId);
                     setRevealPicked([]);
                   }}
-                  className={cn(ghostButton, "mx-1 mb-1 h-auto rounded-md px-2 py-1.5 text-left text-[11px] text-muted-foreground/60")}
+                  className={cn(
+                    ghostButton,
+                    "mx-1 mb-1 h-auto w-[calc(100%-0.5rem)] justify-center rounded-md px-2 py-1.5 text-center text-[11px] text-muted-foreground/60",
+                  )}
                 >
-                  {hiddenByHost.get(group.hostId)!.length} hidden session
-                  {hiddenByHost.get(group.hostId)!.length === 1 ? "" : "s"} — show
+                  Show {hiddenByHost.get(group.hostId)!.length} hidden session
+                  {hiddenByHost.get(group.hostId)!.length === 1 ? "" : "s"}
                 </button>
               )}
             </section>
