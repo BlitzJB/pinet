@@ -1,12 +1,16 @@
 /**
- * One IndexedDB, two stores.
+ * A cache database, separate from the identity one.
  *
  * Everything the browser keeps for us lives here: unsent text and attachments. Both are
  * the kind of thing a person would notice losing, and localStorage is the wrong home for
  * either — it is a shared ~5MB budget that the browser may evict, and it is synchronous.
  */
-export const DB_NAME = "pinet";
-export const DB_VERSION = 2;
+// Deliberately NOT "pinet": lib/device.ts owns that name at version 1 for the browser's
+// identity and keys. Sharing it meant two modules opening one database at two versions,
+// and a tab running the older bundle would fail the open outright — which surfaced as a
+// lost connection, because the device store is what authenticates the client.
+export const DB_NAME = "pinet-cache";
+export const DB_VERSION = 1;
 export const STORE_ATTACHMENTS = "attachments";
 export const STORE_DRAFTS = "drafts";
 
