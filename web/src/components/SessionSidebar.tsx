@@ -15,7 +15,6 @@ import { useStore } from "../lib/store";
 import { useHidden, toggleHidden, toggleHiddenHost, isHidden } from "../lib/hidden";
 import { ghostButton } from "./ui/surfaces";
 import { ensureSummary, isRunComplete, lastExchange, summaryStore } from "../lib/summaries";
-import { EyeOffIcon } from "lucide-react";
 import { SessionStatusIcon } from "./SessionStatusIcon";
 
 const COLLAPSE_KEY = "pinet.collapsedHosts";
@@ -52,12 +51,14 @@ function RowMenu({
   onClose,
   onRename,
   onOpenSide,
+  onHide,
 }: {
   anchor: HTMLElement;
   availability: { allowed: boolean; reason?: string };
   onClose: () => void;
   onRename: () => void;
   onOpenSide: () => void;
+  onHide: () => void;
 }) {
   return (
     <AnchoredMenu anchor={anchor} onClose={onClose}>
@@ -75,6 +76,9 @@ function RowMenu({
       >
         <PanelRightIcon className="size-3.5 text-muted-foreground" />
         Open to the side
+      </button>
+      <button type="button" onClick={onHide} className={cn(menuItem, "text-muted-foreground")}>
+        Hide session
       </button>
     </AnchoredMenu>
   );
@@ -126,6 +130,19 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const hiddenCount = hidden.ids.length + hidden.hosts.length;
   const visible = sessions.filter((session) => !isHidden(hidden, session.sessionId, session.hostId));
   const groups = groupSessionsByHost(visible, filter);
+  // Hidden sessions, grouped by the host they belong to, so each host can report its own
+  // count instead of one global "N hidden" that tells you nothing about where they are.
+  const hiddenByHost = useMemo(() => {
+    const map = new Map<string, typeof sessions>();
+    for (const session of sessions) {
+      if (!isHidden(hidden, session.sessionId, session.hostId)) continue;
+      const key = session.hostId ?? "";
+      map.set(key, [...(map.get(key) ?? []), session]);
+    }
+    return map;
+  }, [sessions, hidden]);
+  const [revealHost, setRevealHost] = useState<string | null>(null);
+  const [revealPicked, setRevealPicked] = useState<string[]>([]);
   const menuPane = menu ? availability(menu.id) : { allowed: false };
   const searching = filter.trim().length > 0;
 
@@ -347,23 +364,7 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                       <SessionStatusIcon sessionId={session.sessionId} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
-                        <button
-                        type="button"
-                        title="Hide from the sidebar and the status board"
-                        aria-label="Hide this session"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          toggleHidden(session.sessionId);
-                        }}
-                        className={cn(
-                          ghostButton,
-                          "absolute end-1 top-1.5 size-5 rounded p-0 text-foreground/25 transition-colors hover:text-foreground",
-                        )}
-                      >
-                        <EyeOffIcon className="size-3" />
-                      </button>
-                      {bySession[session.sessionId]?.[0]?.text && (
+                        {bySession[session.sessionId]?.[0]?.text && (
                           <span className="block truncate text-[11px] leading-tight text-muted-foreground/55" title={bySession[session.sessionId][0].text}>
                             {bySession[session.sessionId][0].text}
                           </span>
@@ -391,6 +392,20 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                     </Link>
                   );
                 })}
+
+              {!isCollapsed && (hiddenByHost.get(group.hostId)?.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRevealHost(group.hostId);
+                    setRevealPicked([]);
+                  }}
+                  className={cn(ghostButton, "mx-1 mb-1 h-auto rounded-md px-2 py-1.5 text-left text-[11px] text-muted-foreground/60")}
+                >
+                  {hiddenByHost.get(group.hostId)!.length} hidden session
+                  {hiddenByHost.get(group.hostId)!.length === 1 ? "" : "s"} — show
+                </button>
+              )}
             </section>
           );
         })}
@@ -423,10 +438,70 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
           <SettingsIcon className="size-4 shrink-0 text-muted-foreground/40 transition-colors duration-200 group-hover/account:text-muted-foreground" />
         </Link>
       </div>
+      {revealHost && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+          onClick={() => setRevealHost(null)}
+          role="dialog"
+          aria-label="Hidden sessions"
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-border/60 bg-background p-4 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p className="text-[13px] font-medium">Hidden sessions</p>
+            <p className="mt-0.5 text-[11.5px] text-muted-foreground/60">Pick the ones to bring back.</p>
+            <div className="mt-3 max-h-72 space-y-0.5 overflow-y-auto">
+              {(hiddenByHost.get(revealHost) ?? []).map((session) => (
+                <label
+                  key={session.sessionId}
+                  className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] transition-colors hover:bg-foreground/[0.04]"
+                >
+                  <input
+                    type="checkbox"
+                    checked={revealPicked.includes(session.sessionId)}
+                    onChange={(event) =>
+                      setRevealPicked((current) =>
+                        event.target.checked ? [...current, session.sessionId] : current.filter((id) => id !== session.sessionId),
+                      )
+                    }
+                  />
+                  <span className="min-w-0 truncate">{session.meta?.name ?? "(unnamed)"}</span>
+                  <span className="ms-auto shrink-0 truncate text-[10.5px] text-muted-foreground/45">{session.meta?.cwd ?? ""}</span>
+                </label>
+              ))}
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRevealHost(null)}
+                className={cn(ghostButton, "h-auto rounded-md px-2.5 py-1.5 text-[12px]")}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={revealPicked.length === 0}
+                onClick={() => {
+                  for (const id of revealPicked) toggleHidden(id);
+                  setRevealHost(null);
+                }}
+                className="rounded-md bg-foreground px-2.5 py-1.5 text-[12px] text-background transition-opacity disabled:opacity-40"
+              >
+                Show selected
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {menu && (
         <RowMenu
           anchor={menu.anchor}
           availability={menuPane}
+          onHide={() => {
+            toggleHidden(menu.id);
+            setMenu(null);
+          }}
           onClose={() => setMenu(null)}
           onRename={() => {
             setEditing(menu.id);
