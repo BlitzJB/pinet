@@ -4,6 +4,11 @@ import { useSessionState } from "../lib/context";
 /**
  * The agent's state at a glance, in the sidebar.
  *
+ * `inline-block` is load-bearing: a bare span is display:inline, where width and height
+ * are ignored, so an empty one occupies no space at all. The dot rendered correctly for
+ * several rounds and was simply invisible — which is also why it looked identical to not
+ * rendering.
+ *
  * Sourced from the session's own store, so it reports what the client actually knows
  * and nothing more: with no attachment there is no status, and this renders nothing
  * rather than guessing. A status-only attach mode would make it free for every session
@@ -23,7 +28,7 @@ export function SessionStatusDot({ sessionId, className }: { sessionId: string; 
         role="status"
         title={state.attached ? "attached, waiting for status" : "not attached"}
         aria-label={state.attached ? "attached, waiting for status" : "not attached"}
-        className={cn("size-2 shrink-0 rounded-full border border-dashed border-foreground/30", className)}
+        className={cn("inline-block size-2 shrink-0 rounded-full border border-dashed border-foreground/30", className)}
       />
     );
   }
@@ -46,7 +51,7 @@ export function SessionStatusDot({ sessionId, className }: { sessionId: string; 
       role="status"
       title={failed ? "the last send failed" : running || compacting ? "working" : waiting ? "waiting on you" : "idle"}
       aria-label={failed ? "the last send failed" : running || compacting ? "working" : waiting ? "waiting on you" : "idle"}
-      className={cn("size-2 shrink-0 rounded-full", tone, (running || compacting) && "animate-pulse motion-reduce:animate-none", className)}
+      className={cn("inline-block size-2 shrink-0 rounded-full", tone, (running || compacting) && "animate-pulse motion-reduce:animate-none", className)}
     />
   );
 }

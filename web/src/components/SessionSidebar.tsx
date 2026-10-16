@@ -343,11 +343,11 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
                       )}
                     >
                       <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                      {/* What the agent is doing, without opening the status board. */}
+                      <SessionStatusDot sessionId={session.sessionId} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px]">{session.meta?.name ?? "(unnamed)"}</span>
-                        {/* What the agent is doing, without opening the status board. */}
-                      <SessionStatusDot sessionId={session.sessionId} className="mb-0.5" />
-                      <button
+                        <button
                         type="button"
                         title="Hide from the sidebar and the status board"
                         aria-label="Hide this session"
