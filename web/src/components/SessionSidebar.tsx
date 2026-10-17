@@ -13,7 +13,7 @@ import { RenameInput } from "./ui/RenameInput";
 import { Avatar } from "./Avatar";
 import { SpawnDialog, type SpawnCapabilityInfo } from "./SpawnDialog";
 import { useStore } from "../lib/store";
-import { useHidden, toggleHidden, toggleHiddenHost, isHidden } from "../lib/hidden";
+import { useHidden, toggleHidden, isHidden } from "../lib/hidden";
 import { ghostButton } from "./ui/surfaces";
 import { ensureSummary, isRunComplete, lastExchange, summaryStore } from "../lib/summaries";
 import { SessionStatusIcon } from "./SessionStatusIcon";
@@ -129,7 +129,6 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
       : session,
   );
   const hidden = useHidden();
-  const hiddenCount = hidden.ids.length + hidden.hosts.length;
   const visible = sessions.filter((session) => !isHidden(hidden, session.sessionId, session.hostId));
   const groups = groupSessionsByHost(visible, filter);
   // Hidden sessions, grouped by the host they belong to, so each host can report its own
@@ -257,23 +256,6 @@ export function SessionSidebar({ onNavigate }: { onNavigate?: () => void }) {
           </p>
         )}
 
-        {hiddenCount > 0 && (
-
-          <button
-
-            type="button"
-
-            onClick={() => { hidden.ids.forEach(toggleHidden); hidden.hosts.forEach(toggleHiddenHost); }}
-
-            className={cn(ghostButton, "mx-1 mb-1 h-auto rounded-md px-2 py-1.5 text-left text-[11px] text-muted-foreground/60")}
-
-          >
-
-            Show {hiddenCount} hidden
-
-          </button>
-
-        )}
 
         {groups.map((group) => {
           const isCollapsed = !searching && collapsed.has(group.hostId);
