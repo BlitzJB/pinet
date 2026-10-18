@@ -123,6 +123,9 @@ export function resolveCommand(text, {
   if (commands.some((command) => command?.name === parsed.name)) {
     return { kind: "passthrough", name: parsed.name, args: parsed.args, text };
   }
+  // Internal bridge commands are not for typing. Recognising them stops them being
+  // forwarded to the model as ordinary text, which is what happened when one was tried.
+  if (parsed.name.startsWith("pinet-")) return { kind: "internal", name: parsed.name, args: parsed.args, text };
   if (implementable.some((command) => command.name === parsed.name)) {
     return { kind: "implementable", name: parsed.name, args: parsed.args, text };
   }
@@ -134,6 +137,10 @@ export const tuiOnlyNotice = (name) => `/${name} needs the terminal UI, so it is
 
 /** Honest about which of the two it is: unimplemented, not impossible. */
 export const notYetNotice = (name) => `/${name} isn't available from the portal yet.`;
+
+/** Internal commands, with a pointer to the one that is meant to be typed. */
+export const internalNotice = (name) =>
+  `/${name} is internal. Use /${name.replace(/^pinet-/, "")} instead.`;
 
 /** Directories that are never worth listing, and would swamp the results. */
 export const DEFAULT_IGNORES = new Set([

@@ -24,7 +24,7 @@ import { clearHostState, ensureHostKeys, enrollHostWithCode, loadHostState, onbo
 import { SessionSpawner, detectGit, detectTmux } from "../src/host/spawner.mjs";
 import { HISTORY_PAGE_SIZE, INITIAL_ENTRY_LIMIT, historyWindow } from "../src/host/history.mjs";
 import { DEFAULT_POLICIES, VoicePipeline, VoiceSpool, createCleaner, createTranscriber, resolveApiKey } from "../src/host/voice.mjs";
-import { commandCatalogue, filterPaths, notYetNotice, resolveCommand, tuiOnlyNotice, walkFiles } from "../src/host/commands.mjs";
+import { commandCatalogue, filterPaths, internalNotice, notYetNotice, resolveCommand, tuiOnlyNotice, walkFiles } from "../src/host/commands.mjs";
 import {
   buildContentParts,
   createAttachmentStore,
@@ -430,6 +430,8 @@ export default function pinet(pi: Pi): void {
             return { accepted: false, mode: null, error: rewrite.error, data: { notice: rewrite.refuse } };
           }
           if (rewrite.op) return handleCommand({ op: rewrite.op, args: { ...args, ...rewrite.args } });
+        } else if (resolved.kind === "internal") {
+          return { accepted: false, mode: null, error: "internal_command", data: { notice: internalNotice(resolved.name) } };
         } else if (resolved.kind === "implementable") {
           // Unimplemented, not impossible — and the difference is the user's to see.
           return { accepted: false, mode: null, error: "not_yet", data: { notice: notYetNotice(resolved.name) } };
