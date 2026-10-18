@@ -9,7 +9,9 @@
 import type { PiNetConnection } from "./pinet";
 
 /** Raw bytes per chunk. Base64 inflates by a third, so this stays under the cap. */
-const CHUNK_BYTES = 32 * 1024;
+// A multiple of three, so base64 encodes each chunk without padding and the decoder does
+// not have to carry bits across a boundary. 24576 = 3 x 8192.
+const CHUNK_BYTES = 24 * 1024;
 
 export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 export const MAX_ATTACHMENTS_PER_MESSAGE = 4;

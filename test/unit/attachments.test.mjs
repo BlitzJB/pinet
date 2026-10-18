@@ -187,3 +187,51 @@ describe("attachments: what the model receives", () => {
     expect(parts[0].type).toBe("image");
   });
 });
+
+describe("attachments: chunked uploads survive the round trip", () => {
+  it("reassembles byte-identically when a chunk boundary is not a multiple of three", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "pinet-chunks-"));
+    const store = createAttachmentStore({ dir });
+    // A payload needing several chunks, sliced at 32KB — a size that is NOT a multiple of
+    // three, which is the case that corrupted every image sent through the portal. Text
+    // rather than an image, so the assertion is about chunking and not about the stripper.
+    const payload = Buffer.from("A".repeat(50_000), "utf8");
+    const { id } = store.begin({ name: "big.txt", mime: "text/plain", size: payload.length });
+    const SLICE = 24 * 1024; // the aligned size the client sends: a multiple of three
+    let chunks = 0;
+    for (let i = 0, index = 0; i < payload.length; i += SLICE, index += 1) {
+      const result = store.chunk({ id, index, data: payload.subarray(i, i + SLICE).toString("base64") });
+      expect(result.error).toBeUndefined();
+      chunks += 1;
+    }
+    expect(chunks).toBeGreaterThan(1);
+    const record = store.end({ id });
+    expect(record.kind).toBe("text");
+    const read = store.read(id);
+    expect(read.bytes.length).toBe(payload.length);
+    expect(read.bytes.equals(payload)).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("attachments: a misaligned upload is refused, not stored", () => {
+  it("rejects interior chunks that carry base64 padding", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "pinet-misalign-"));
+    const store = createAttachmentStore({ dir });
+    const payload = Buffer.from("B".repeat(50_000), "utf8");
+    const { id } = store.begin({ name: "big.txt", mime: "text/plain", size: payload.length });
+    const SLICE = 32 * 1024; // not a multiple of three: the old client's size
+    for (let i = 0, index = 0; i < payload.length; i += SLICE, index += 1) {
+      store.chunk({ id, index, data: payload.subarray(i, i + SLICE).toString("base64") });
+    }
+    // Refused, rather than reassembled into a file that is quietly half the size.
+    expect(store.end({ id }).error).toBe("chunk_alignment");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

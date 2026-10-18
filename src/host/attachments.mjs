@@ -215,12 +215,17 @@ export function createAttachmentStore({ dir = join(homedir(), ".pinet", "attachm
       const slot = Number(index);
       if (!Number.isInteger(slot) || slot < 0 || slot > 10_000) return { error: "bad_index" };
       const previous = entry.chunks[slot];
-      entry.received += bytes.length - (previous?.length ?? 0);
+      entry.received += bytes.length - (previous ? Buffer.from(previous, "base64").length : 0);
       if (entry.received > maxBytes) {
         pending.delete(String(id));
         return { error: "too_large" };
       }
-      entry.chunks[slot] = bytes;
+      // Keep the base64 text, not the decoded bytes. Decoding each chunk independently
+      // loses alignment at any boundary that is not a multiple of three bytes: base64 pads
+      // each chunk separately, so the padding is stripped and every following byte shifts.
+      // That produced corrupt images, and a corrupt image in history fails every subsequent
+      // request. Joining the text and decoding once is correct for any chunk size.
+      entry.chunks[slot] = data;
       return { ok: true, received: entry.received };
     },
 
@@ -230,7 +235,17 @@ export function createAttachmentStore({ dir = join(homedir(), ".pinet", "attachm
       const entry = pending.get(key);
       if (!entry) return { error: "unknown_attachment" };
       pending.delete(key);
-      const bytes = Buffer.concat(entry.chunks.filter(Boolean));
+      // Every chunk except the last must be unpadded. A padded chunk ends on a byte
+      // boundary, and concatenating it with the next one does not resume the stream — so
+      // the result is silently corrupt from that point on. Node's decoder stops at the
+      // first "=", which is how a 32KB client produced a 32KB image and a session that
+      // failed every request afterwards. Refuse it here instead: an upload that fails
+      // loudly is better than history that poisons every future turn.
+      const ordered = entry.chunks.filter(Boolean);
+      if (ordered.slice(0, -1).some((chunk) => chunk.includes("="))) {
+        return { error: "chunk_alignment" };
+      }
+      const bytes = Buffer.from(ordered.join(""), "base64");
       if (bytes.length === 0) return { error: "empty_attachment" };
       const sniffed = sniffMime(bytes);
       const isImage = Boolean(sniffed);
