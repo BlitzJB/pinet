@@ -114,8 +114,12 @@ describe("attachments: the store", () => {
       const bytes = png({ text: "secret metadata" });
       const { id } = store.begin({ name: "shot.png", mime: "image/png", size: bytes.length });
       expect(id).toMatch(ATTACHMENT_ID_RE);
-      store.chunk({ id, index: 0, data: bytes.subarray(0, 20).toString("base64") });
-      store.chunk({ id, index: 1, data: bytes.subarray(20).toString("base64") });
+      // Aligned slices: an interior chunk must not carry base64 padding. The misaligned
+      // case has its own test asserting it is refused. This one only ever checked that
+      // metadata was stripped, never that the bytes survived — which is why the alignment
+      // bug reached production.
+      store.chunk({ id, index: 0, data: bytes.subarray(0, 18).toString("base64") });
+      store.chunk({ id, index: 1, data: bytes.subarray(18).toString("base64") });
       const record = store.end({ id });
       expect(record).toMatchObject({ kind: "image", mime: "image/png", name: "shot.png" });
       // Metadata is gone by the time it is on disk.
