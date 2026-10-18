@@ -25,7 +25,6 @@ export const PORTAL_BUILTINS = [
   { name: "thinking", description: "Set the thinking level", argumentHint: "<level>" },
   { name: "name", description: "Rename this session", argumentHint: "<name>" },
   { name: "session", description: "Show session info and stats" },
-  { name: "reload", description: "Reload extensions, skills and prompts" },
 ];
 
 /**
@@ -37,6 +36,7 @@ export const PORTAL_BUILTINS = [
  * a limitation.
  */
 export const IMPLEMENTABLE_BUILTINS = [
+  { name: "reload", description: "Reload extensions, skills and prompts" },
   { name: "new", description: "Start a new session" },
   { name: "fork", description: "Fork from an earlier message" },
   { name: "clone", description: "Duplicate this session" },

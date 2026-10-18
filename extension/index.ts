@@ -568,13 +568,16 @@ export default function pinet(pi: Pi): void {
         // The in-place upgrade path: reload extensions, skills, prompts and themes without
         // killing the session. Guarded, because `reload` is not on every context — and
         // reporting success for a no-op would be worse than refusing.
-        // Dispatched as our own command, because only a command context can reload.
-        try {
-          pi.sendUserMessage("/pinet-reload");
-          return { accepted: true, mode: "immediate" };
-        } catch (error) {
-          return { accepted: false, mode: null, error: `reload_failed:${String((error as Error)?.message ?? error)}` };
-        }
+        // NOT sendUserMessage: that does not dispatch a registered command, it injects the
+        // text as a user message — so /reload was arriving in the conversation as
+        // "/pinet-reload" and the reload never happened. The command stays registered, so it
+        // works when typed in the terminal, where a real command context exists.
+        return {
+          accepted: false,
+          mode: null,
+          error: "reload_needs_terminal",
+          data: { notice: "Reload needs the terminal: run /pinet-reload there. From the portal it isn't wired yet." },
+        };
       }
       case "commands":
         // What the composer offers. Sent encrypted like everything else that
