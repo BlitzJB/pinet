@@ -123,9 +123,6 @@ export function resolveCommand(text, {
   if (commands.some((command) => command?.name === parsed.name)) {
     return { kind: "passthrough", name: parsed.name, args: parsed.args, text };
   }
-  // Internal bridge commands are not for typing. Recognising them stops them being
-  // forwarded to the model as ordinary text, which is what happened when one was tried.
-  if (parsed.name.startsWith("pinet-")) return { kind: "internal", name: parsed.name, args: parsed.args, text };
   if (implementable.some((command) => command.name === parsed.name)) {
     return { kind: "implementable", name: parsed.name, args: parsed.args, text };
   }
