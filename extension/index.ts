@@ -24,7 +24,7 @@ import { clearHostState, ensureHostKeys, enrollHostWithCode, loadHostState, onbo
 import { SessionSpawner, detectGit, detectTmux } from "../src/host/spawner.mjs";
 import { HISTORY_PAGE_SIZE, INITIAL_ENTRY_LIMIT, historyWindow } from "../src/host/history.mjs";
 import { DEFAULT_POLICIES, VoicePipeline, VoiceSpool, createCleaner, createTranscriber, resolveApiKey } from "../src/host/voice.mjs";
-import { commandCatalogue, filterPaths, resolveCommand, tuiOnlyNotice, walkFiles } from "../src/host/commands.mjs";
+import { commandCatalogue, filterPaths, notYetNotice, resolveCommand, tuiOnlyNotice, walkFiles } from "../src/host/commands.mjs";
 import {
   buildContentParts,
   createAttachmentStore,
@@ -430,6 +430,9 @@ export default function pinet(pi: Pi): void {
             return { accepted: false, mode: null, error: rewrite.error, data: { notice: rewrite.refuse } };
           }
           if (rewrite.op) return handleCommand({ op: rewrite.op, args: { ...args, ...rewrite.args } });
+        } else if (resolved.kind === "implementable") {
+          // Unimplemented, not impossible — and the difference is the user's to see.
+          return { accepted: false, mode: null, error: "not_yet", data: { notice: notYetNotice(resolved.name) } };
         } else if (resolved.kind === "tui-only") {
           return { accepted: false, mode: null, error: "tui_only", data: { notice: tuiOnlyNotice(resolved.name) } };
         }
@@ -561,6 +564,26 @@ export default function pinet(pi: Pi): void {
           },
         };
       }
+      case "reload": {
+        // The in-place upgrade path: reload extensions, skills, prompts and themes without
+        // killing the session. Guarded, because `reload` is not on every context — and
+        // reporting success for a no-op would be worse than refusing.
+        const reload = (ctx as unknown as { reload?: () => unknown }).reload;
+        if (typeof reload !== "function") {
+          return {
+            accepted: false,
+            mode: null,
+            error: "reload_unsupported",
+            data: { notice: "This pi build doesn't expose reload from an extension." },
+          };
+        }
+        try {
+          await (reload as () => Promise<void>).call(ctx);
+          return { accepted: true, mode: "immediate" };
+        } catch (error) {
+          return { accepted: false, mode: null, error: `reload_failed:${String((error as Error)?.message ?? error)}` };
+        }
+      }
       case "commands":
         // What the composer offers. Sent encrypted like everything else that
         // describes a session's contents.
@@ -645,6 +668,8 @@ export default function pinet(pi: Pi): void {
           : { error: "notice", refuse: `Thinking is ${ctx.thinkingLevel ?? "off"}. Set it with /thinking <level>.` };
       case "name":
         return args ? { op: "rename", args: { name: args } } : { error: "command_needs_argument", refuse: "Give a name, like /name Refactor" };
+      case "reload":
+        return { op: "reload", args: {} };
       case "session": {
         const entries = ctx.sessionManager.getEntries() as unknown as Json[];
         const model = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none";

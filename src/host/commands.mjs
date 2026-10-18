@@ -25,13 +25,31 @@ export const PORTAL_BUILTINS = [
   { name: "thinking", description: "Set the thinking level", argumentHint: "<level>" },
   { name: "name", description: "Rename this session", argumentHint: "<name>" },
   { name: "session", description: "Show session info and stats" },
+  { name: "reload", description: "Reload extensions, skills and prompts" },
 ];
 
-/** Built-ins that only make sense with a terminal: refused, with a reason. */
+/**
+ * Real commands with a programmatic equivalent that simply is not wired up yet.
+ *
+ * These used to sit in the terminal-only list, which claimed they were impossible when the
+ * truth was that they were unimplemented. Those are different facts and the user is owed
+ * the right one: "not available from the portal yet" is a to-do, "needs the terminal UI" is
+ * a limitation.
+ */
+export const IMPLEMENTABLE_BUILTINS = [
+  { name: "new", description: "Start a new session" },
+  { name: "fork", description: "Fork from an earlier message" },
+  { name: "clone", description: "Duplicate this session" },
+  { name: "resume", description: "Switch to another session" },
+  { name: "export", description: "Export this session" },
+  { name: "import", description: "Import a session" },
+  { name: "changelog", description: "Show changelog entries" },
+  { name: "share", description: "Share as a secret gist" },
+];
+
+/** Genuinely need a terminal: menus, selectors, keybindings, provider auth. */
 export const TUI_ONLY_BUILTINS = [
-  "settings", "tree", "scoped-models", "export", "import", "share", "bug", "copy",
-  "changelog", "hotkeys", "fork", "clone", "trust", "login", "logout", "new",
-  "resume", "reload", "quit",
+  "settings", "tree", "scoped-models", "hotkeys", "copy", "quit", "trust", "login", "logout", "bug",
 ];
 
 const COMMAND_RE = /^\/([A-Za-z][A-Za-z0-9:_-]*)(?:\s+([\s\S]*))?$/;
@@ -48,7 +66,12 @@ export function parseCommand(text) {
  * registered (extensions, prompt templates, skills), then the terminal-only ones so
  * they are discoverable and can explain themselves.
  */
-export function commandCatalogue({ commands = [], portalBuiltins = PORTAL_BUILTINS, tuiOnly = TUI_ONLY_BUILTINS } = {}) {
+export function commandCatalogue({
+  commands = [],
+  portalBuiltins = PORTAL_BUILTINS,
+  implementable = IMPLEMENTABLE_BUILTINS,
+  tuiOnly = TUI_ONLY_BUILTINS,
+} = {}) {
   const seen = new Set();
   const list = [];
   for (const command of portalBuiltins) {
@@ -66,6 +89,11 @@ export function commandCatalogue({ commands = [], portalBuiltins = PORTAL_BUILTI
       source: typeof command.source === "string" ? command.source : "extension",
     });
   }
+  for (const command of implementable) {
+    if (seen.has(command.name)) continue;
+    seen.add(command.name);
+    list.push({ name: command.name, description: command.description ?? null, argumentHint: null, source: "not-yet" });
+  }
   for (const name of tuiOnly) {
     if (seen.has(name)) continue;
     seen.add(name);
@@ -81,7 +109,12 @@ export function commandCatalogue({ commands = [], portalBuiltins = PORTAL_BUILTI
  * fall through to the agent as ordinary text, so a path that happens to start with
  * a slash keeps working and a typo gets answered instead of swallowed.
  */
-export function resolveCommand(text, { commands = [], portalBuiltins = PORTAL_BUILTINS, tuiOnly = TUI_ONLY_BUILTINS } = {}) {
+export function resolveCommand(text, {
+  commands = [],
+  portalBuiltins = PORTAL_BUILTINS,
+  implementable = IMPLEMENTABLE_BUILTINS,
+  tuiOnly = TUI_ONLY_BUILTINS,
+} = {}) {
   const parsed = parseCommand(text);
   if (!parsed) return { kind: "none", text };
   if (portalBuiltins.some((command) => command.name === parsed.name)) {
@@ -90,11 +123,17 @@ export function resolveCommand(text, { commands = [], portalBuiltins = PORTAL_BU
   if (commands.some((command) => command?.name === parsed.name)) {
     return { kind: "passthrough", name: parsed.name, args: parsed.args, text };
   }
+  if (implementable.some((command) => command.name === parsed.name)) {
+    return { kind: "implementable", name: parsed.name, args: parsed.args, text };
+  }
   if (tuiOnly.includes(parsed.name)) return { kind: "tui-only", name: parsed.name, args: parsed.args, text };
   return { kind: "none", text };
 }
 
 export const tuiOnlyNotice = (name) => `/${name} needs the terminal UI, so it isn't available from the portal.`;
+
+/** Honest about which of the two it is: unimplemented, not impossible. */
+export const notYetNotice = (name) => `/${name} isn't available from the portal yet.`;
 
 /** Directories that are never worth listing, and would swamp the results. */
 export const DEFAULT_IGNORES = new Set([
