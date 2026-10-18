@@ -568,17 +568,9 @@ export default function pinet(pi: Pi): void {
         // The in-place upgrade path: reload extensions, skills, prompts and themes without
         // killing the session. Guarded, because `reload` is not on every context — and
         // reporting success for a no-op would be worse than refusing.
-        const reload = (ctx as unknown as { reload?: () => unknown }).reload;
-        if (typeof reload !== "function") {
-          return {
-            accepted: false,
-            mode: null,
-            error: "reload_unsupported",
-            data: { notice: "This pi build doesn't expose reload from an extension." },
-          };
-        }
+        // Dispatched as our own command, because only a command context can reload.
         try {
-          await (reload as () => Promise<void>).call(ctx);
+          pi.sendUserMessage("/pinet-reload");
           return { accepted: true, mode: "immediate" };
         } catch (error) {
           return { accepted: false, mode: null, error: `reload_failed:${String((error as Error)?.message ?? error)}` };
@@ -852,6 +844,23 @@ export default function pinet(pi: Pi): void {
       } catch (error) {
         notify(ctx, `Could not start a spawner: ${String((error as Error)?.message ?? error)}`, "error");
       }
+    },
+  });
+
+  /**
+   * The bridge to the command context.
+   *
+   * `reload`, `newSession`, `fork` and `switchSession` live on ExtensionCommandContext, not
+   * on the session context an op handler sees — which is why /reload could not be wired
+   * directly. A registered command is the only place that context exists, and
+   * sendUserMessage dispatches registered commands immediately, so an op can reach it by
+   * sending its own command. Kept deliberately thin: the context is used and dropped, never
+   * stored, because pi marks a captured one stale after a reload.
+   */
+  pi.registerCommand("pinet-reload", {
+    description: "Reload extensions, skills and prompts (used by the portal)",
+    handler: async (_args, commandCtx) => {
+      await commandCtx.reload();
     },
   });
 
