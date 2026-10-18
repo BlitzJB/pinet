@@ -568,16 +568,24 @@ export default function pinet(pi: Pi): void {
         // The in-place upgrade path: reload extensions, skills, prompts and themes without
         // killing the session. Guarded, because `reload` is not on every context — and
         // reporting success for a no-op would be worse than refusing.
-        // NOT sendUserMessage: that does not dispatch a registered command, it injects the
-        // text as a user message — so /reload was arriving in the conversation as
-        // "/pinet-reload" and the reload never happened. The command stays registered, so it
-        // works when typed in the terminal, where a real command context exists.
-        return {
-          accepted: false,
-          mode: null,
-          error: "reload_needs_terminal",
-          data: { notice: "Reload needs the terminal: run /pinet-reload there. From the portal it isn't wired yet." },
-        };
+        // Only a command context can reload, and it cannot be conjured from here — so this
+        // uses the closure the command handler left behind, if it has ever run. Never
+        // sendUserMessage: that writes to the conversation rather than dispatching.
+        if (!reloadPrimed) {
+          return {
+            accepted: false,
+            mode: null,
+            error: "reload_not_primed",
+            data: { notice: "Run /pinet-reload in the terminal once, then /reload works from here." },
+          };
+        }
+        try {
+          await reloadPrimed();
+          return { accepted: true, mode: "immediate" };
+        } catch (error) {
+          reloadPrimed = undefined;
+          return { accepted: false, mode: null, error: `reload_failed:${String((error as Error)?.message ?? error)}` };
+        }
       }
       case "commands":
         // What the composer offers. Sent encrypted like everything else that
@@ -860,10 +868,25 @@ export default function pinet(pi: Pi): void {
    * sending its own command. Kept deliberately thin: the context is used and dropped, never
    * stored, because pi marks a captured one stale after a reload.
    */
+  /**
+   * A reload capability, primed by running the command.
+   *
+   * The command context is the only place `reload()` exists — ExtensionRuntime does not
+   * carry it — so an op handler cannot reach one directly, and sendUserMessage is the wrong
+   * route entirely (it writes to the conversation, which is how "/pinet-reload" ended up
+   * being read as a user message).
+   *
+   * What is safe is holding the *closure* rather than the context: the context goes stale
+   * after a reload, but calling reload() is the thing that causes that, so a single call
+   * from a primed closure is sound. The limitation is honest and stated: until the command
+   * has been run once in the terminal, the portal says so.
+   */
+  let reloadPrimed: (() => Promise<void>) | undefined;
   pi.registerCommand("pinet-reload", {
     description: "Reload extensions, skills and prompts (used by the portal)",
     handler: async (_args, commandCtx) => {
-      await commandCtx.reload();
+      reloadPrimed = () => commandCtx.reload();
+      await reloadPrimed();
     },
   });
 
